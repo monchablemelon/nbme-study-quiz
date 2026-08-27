@@ -1,4 +1,4 @@
-```python
+
 import hashlib
 import random
 import re
@@ -1787,4 +1787,3 @@ if st.session_state.show_explanation:
         st.session_state.flash_type = None
 
         st.rerun()
-```
