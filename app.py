@@ -1,4 +1,4 @@
-```python
+
 import hashlib
 import random
 import re
@@ -1847,4 +1847,3 @@ try:
 except Exception:
 
     pass
-```
