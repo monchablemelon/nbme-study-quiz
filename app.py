@@ -1,4 +1,4 @@
-```python
+
 import hashlib
 import random
 import re
@@ -1928,4 +1928,3 @@ if st.session_state.show_explanation:
         st.session_state.meltdown_popup = False
 
         st.rerun()
-```
