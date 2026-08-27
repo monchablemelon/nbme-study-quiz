@@ -950,11 +950,6 @@ st.caption(
     "Choose an answer. Incorrect answers can be "
     "retried until the correct answer is selected."
 )
-
-
-# ============================================================
-# START PAGE
-# ============================================================
 # ============================================================
 # LOGIN / START PAGE
 # ============================================================
@@ -985,7 +980,7 @@ if not st.session_state.quiz_started:
         username = username.strip()
 
         # ----------------------------------------------------
-        # Check username
+        # CHECK USERNAME
         # ----------------------------------------------------
 
         users = st.secrets["users"]
@@ -999,7 +994,7 @@ if not st.session_state.quiz_started:
             st.stop()
 
         # ----------------------------------------------------
-        # Check password
+        # CHECK PASSWORD
         # ----------------------------------------------------
 
         expected_password = users[username]
@@ -1013,7 +1008,7 @@ if not st.session_state.quiz_started:
             st.stop()
 
         # ----------------------------------------------------
-        # Create participant ID
+        # CREATE PARTICIPANT ID
         # ----------------------------------------------------
 
         participant_id = create_participant_id(
@@ -1022,7 +1017,7 @@ if not st.session_state.quiz_started:
         )
 
         # ----------------------------------------------------
-        # Save participant
+        # SAVE PARTICIPANT
         # ----------------------------------------------------
 
         try:
@@ -1043,7 +1038,7 @@ if not st.session_state.quiz_started:
             st.stop()
 
         # ----------------------------------------------------
-        # Randomize questions
+        # RANDOMIZE QUESTIONS
         # ----------------------------------------------------
 
         question_copy = QUESTIONS.copy()
@@ -1053,7 +1048,7 @@ if not st.session_state.quiz_started:
         )
 
         # ----------------------------------------------------
-        # Store login information
+        # STORE LOGIN INFORMATION
         # ----------------------------------------------------
 
         st.session_state.quiz_started = True
@@ -1093,87 +1088,6 @@ if not st.session_state.quiz_started:
     st.write(
         "Please use the username and password "
         "provided to you."
-    )
-
-    st.stop()
-        # ----------------------------------------------------
-        # Generate participant ID
-        # ----------------------------------------------------
-
-        participant_id = create_participant_id(
-            participant_code,
-            st.secrets["PARTICIPANT_SALT"]
-        )
-
-        # ----------------------------------------------------
-        # Save participant
-        # ----------------------------------------------------
-
-        try:
-
-            save_participant(
-                participant_id,
-                display_name
-            )
-
-        except Exception as error:
-
-            st.error(
-                "Could not connect to the database."
-            )
-
-            st.exception(error)
-
-            st.stop()
-
-        # ----------------------------------------------------
-        # Start randomized quiz
-        # ----------------------------------------------------
-
-        question_copy = QUESTIONS.copy()
-
-        random.shuffle(
-            question_copy
-        )
-
-        st.session_state.quiz_started = True
-
-        st.session_state.participant_id = (
-            participant_id
-        )
-
-        st.session_state.display_name = (
-            display_name
-        )
-
-        st.session_state.questions = (
-            question_copy
-        )
-
-        st.session_state.current_index = 0
-
-        st.session_state.current_correct = False
-
-        st.session_state.quiz_attempts = 0
-
-        st.session_state.quiz_correct = 0
-
-        st.session_state.quiz_complete = False
-
-        st.session_state.last_feedback = ""
-
-        st.session_state.last_feedback_type = ""
-
-        st.session_state.show_explanation = False
-
-        st.rerun()
-
-    st.divider()
-
-    st.write(
-        "Each answer attempt is saved online, "
-        "so your historical performance can be "
-        "calculated across future sessions."
     )
 
     st.stop()
