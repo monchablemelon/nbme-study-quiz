@@ -1,3 +1,4 @@
+```python
 import hashlib
 import random
 import re
@@ -803,6 +804,76 @@ def get_question_stats(
     }
 
 
+def get_global_stats():
+    """
+    Get historical accuracy across all users
+    and all answer attempts.
+
+    Uses Supabase exact row counts rather than
+    downloading the entire answer_logs table.
+    """
+
+    # --------------------------------------------------------
+    # Total attempts from all users
+    # --------------------------------------------------------
+
+    total_response = (
+        supabase
+        .table("answer_logs")
+        .select(
+            "*",
+            count="exact",
+            head=True
+        )
+        .execute()
+    )
+
+    total_attempts = (
+        total_response.count or 0
+    )
+
+    # --------------------------------------------------------
+    # Total correct attempts from all users
+    # --------------------------------------------------------
+
+    correct_response = (
+        supabase
+        .table("answer_logs")
+        .select(
+            "*",
+            count="exact",
+            head=True
+        )
+        .eq(
+            "is_correct",
+            True
+        )
+        .execute()
+    )
+
+    total_correct = (
+        correct_response.count or 0
+    )
+
+    # --------------------------------------------------------
+    # Calculate global accuracy
+    # --------------------------------------------------------
+
+    global_accuracy = (
+        total_correct
+        / total_attempts
+        * 100
+        if total_attempts
+        else 0
+    )
+
+    return (
+        total_attempts,
+        total_correct,
+        global_accuracy
+    )
+
+
 # ============================================================
 # ADMIN FUNCTIONS
 # ============================================================
@@ -843,10 +914,6 @@ def initialize_quiz_state():
 
         "current_correct": False,
 
-        "quiz_attempts": 0,
-
-        "quiz_correct": 0,
-
         "quiz_complete": False,
 
         "last_feedback": "",
@@ -854,6 +921,8 @@ def initialize_quiz_state():
         "last_feedback_type": "",
 
         "show_explanation": False,
+
+        "flash_type": None,
     }
 
     for key, value in defaults.items():
@@ -864,6 +933,66 @@ def initialize_quiz_state():
 
 
 initialize_quiz_state()
+
+
+# ============================================================
+# ANSWER FLASH
+# ============================================================
+
+if st.session_state.get("flash_type"):
+
+    if st.session_state.flash_type == "correct":
+
+        flash_color = "rgba(0, 200, 0, 0.40)"
+
+    else:
+
+        flash_color = "rgba(255, 0, 0, 0.40)"
+
+    st.markdown(
+        f"""
+        <style>
+
+        @keyframes answerFlash {{
+            0% {{
+                opacity: 0;
+            }}
+
+            20% {{
+                opacity: 1;
+            }}
+
+            60% {{
+                opacity: 1;
+            }}
+
+            100% {{
+                opacity: 0;
+            }}
+        }}
+
+        .answer-flash {{
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: {flash_color};
+            z-index: 999999;
+            pointer-events: none;
+            animation: answerFlash 0.65s ease-out forwards;
+        }}
+
+        </style>
+
+        <div class="answer-flash"></div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    # Clear the flash so it does not repeat
+    # on the next Streamlit rerun.
+    st.session_state.flash_type = None
 
 
 # ============================================================
@@ -925,10 +1054,6 @@ with st.sidebar:
 
             st.session_state.current_correct = False
 
-            st.session_state.quiz_attempts = 0
-
-            st.session_state.quiz_correct = 0
-
             st.session_state.quiz_complete = False
 
             st.session_state.last_feedback = ""
@@ -936,6 +1061,8 @@ with st.sidebar:
             st.session_state.last_feedback_type = ""
 
             st.session_state.show_explanation = False
+
+            st.session_state.flash_type = None
 
             st.rerun()
 
@@ -950,6 +1077,8 @@ st.caption(
     "Choose an answer. Incorrect answers can be "
     "retried until the correct answer is selected."
 )
+
+
 # ============================================================
 # LOGIN / START PAGE
 # ============================================================
@@ -1069,10 +1198,6 @@ if not st.session_state.quiz_started:
 
         st.session_state.current_correct = False
 
-        st.session_state.quiz_attempts = 0
-
-        st.session_state.quiz_correct = 0
-
         st.session_state.quiz_complete = False
 
         st.session_state.last_feedback = ""
@@ -1080,6 +1205,8 @@ if not st.session_state.quiz_started:
         st.session_state.last_feedback_type = ""
 
         st.session_state.show_explanation = False
+
+        st.session_state.flash_type = None
 
         st.rerun()
 
@@ -1204,19 +1331,9 @@ if st.session_state.quiz_complete:
         questions
     )
 
-    quiz_correct = (
-        st.session_state.quiz_correct
-    )
-
-    quiz_attempts = (
-        st.session_state.quiz_attempts
-    )
-
-    completion_accuracy = (
-        quiz_correct
-        / total_questions
-        * 100
-    )
+    # --------------------------------------------------------
+    # YOUR HISTORICAL ACCURACY
+    # --------------------------------------------------------
 
     try:
 
@@ -1242,50 +1359,56 @@ if st.session_state.quiz_complete:
 
         historical_accuracy = 0
 
-    col1, col2, col3, col4 = st.columns(4)
+    # --------------------------------------------------------
+    # GLOBAL HISTORICAL ACCURACY
+    # --------------------------------------------------------
+
+    try:
+
+        (
+            global_attempts,
+            global_correct,
+            global_accuracy
+        ) = get_global_stats()
+
+    except Exception:
+
+        global_attempts = 0
+
+        global_correct = 0
+
+        global_accuracy = 0
+
+    # --------------------------------------------------------
+    # DISPLAY ACCURACY
+    # --------------------------------------------------------
+
+    col1, col2 = st.columns(2)
 
     with col1:
 
         st.metric(
-            "Questions",
-            total_questions
+            "Your historical accuracy",
+            f"{historical_accuracy:.1f}%"
         )
 
     with col2:
 
         st.metric(
-            "Correct",
-            quiz_correct
-        )
-
-    with col3:
-
-        st.metric(
-            "Attempts",
-            quiz_attempts
-        )
-
-    with col4:
-
-        st.metric(
-            "Quiz accuracy",
-            f"{completion_accuracy:.0f}%"
+            "Global historical accuracy",
+            f"{global_accuracy:.1f}%"
         )
 
     st.divider()
 
-    st.subheader(
-        "Historical statistics"
+    st.write(
+        "Your historical accuracy includes all of your "
+        "recorded answer attempts across previous quizzes."
     )
 
     st.write(
-        f"Historical attempts: "
-        f"**{historical_attempts:,}**"
-    )
-
-    st.write(
-        f"Historical accuracy: "
-        f"**{historical_accuracy:.1f}%**"
+        "Global historical accuracy combines answer attempts "
+        "from all users."
     )
 
     if st.button(
@@ -1308,10 +1431,6 @@ if st.session_state.quiz_complete:
 
         st.session_state.current_correct = False
 
-        st.session_state.quiz_attempts = 0
-
-        st.session_state.quiz_correct = 0
-
         st.session_state.quiz_complete = False
 
         st.session_state.last_feedback = ""
@@ -1319,6 +1438,8 @@ if st.session_state.quiz_complete:
         st.session_state.last_feedback_type = ""
 
         st.session_state.show_explanation = False
+
+        st.session_state.flash_type = None
 
         st.rerun()
 
@@ -1532,11 +1653,11 @@ for letter in [
 
             st.stop()
 
-        st.session_state.quiz_attempts += 1
+        # ----------------------------------------------------
+        # PROCESS ANSWER
+        # ----------------------------------------------------
 
         if is_correct:
-
-            st.session_state.quiz_correct += 1
 
             st.session_state.current_correct = True
 
@@ -1550,6 +1671,11 @@ for letter in [
 
             st.session_state.show_explanation = True
 
+            # Green screen flash
+            st.session_state.flash_type = (
+                "correct"
+            )
+
         else:
 
             st.session_state.last_feedback = (
@@ -1557,6 +1683,11 @@ for letter in [
             )
 
             st.session_state.last_feedback_type = (
+                "incorrect"
+            )
+
+            # Red screen flash
+            st.session_state.flash_type = (
                 "incorrect"
             )
 
@@ -1650,16 +1781,22 @@ if st.session_state.show_explanation:
 
         st.session_state.show_explanation = False
 
+        st.session_state.flash_type = None
+
         st.rerun()
 
 
 # ============================================================
-# OVERALL PERSONAL STATISTICS
+# OVERALL PERSONAL + GLOBAL STATISTICS
 # ============================================================
 
 st.divider()
 
 try:
+
+    # --------------------------------------------------------
+    # YOUR HISTORICAL ACCURACY
+    # --------------------------------------------------------
 
     (
         historical_rows,
@@ -1677,29 +1814,37 @@ try:
         else 0
     )
 
-    col1, col2, col3 = st.columns(3)
+    # --------------------------------------------------------
+    # GLOBAL HISTORICAL ACCURACY
+    # --------------------------------------------------------
+
+    (
+        global_attempts,
+        global_correct,
+        global_accuracy
+    ) = get_global_stats()
+
+    # --------------------------------------------------------
+    # DISPLAY
+    # --------------------------------------------------------
+
+    col1, col2 = st.columns(2)
 
     with col1:
 
         st.metric(
-            "Quiz attempts",
-            st.session_state.quiz_attempts
+            "Your historical accuracy",
+            f"{historical_accuracy:.1f}%"
         )
 
     with col2:
 
         st.metric(
-            "Quiz correct",
-            st.session_state.quiz_correct
-        )
-
-    with col3:
-
-        st.metric(
-            "Historical accuracy",
-            f"{historical_accuracy:.1f}%"
+            "Global historical accuracy",
+            f"{global_accuracy:.1f}%"
         )
 
 except Exception:
 
     pass
+```
