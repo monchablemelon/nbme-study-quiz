@@ -955,58 +955,147 @@ st.caption(
 # ============================================================
 # START PAGE
 # ============================================================
+# ============================================================
+# LOGIN / START PAGE
+# ============================================================
 
 if not st.session_state.quiz_started:
 
     st.subheader(
-        "Enter your details"
+        "Log in to start"
     )
 
-    display_name = st.text_input(
-        "Your name",
-        placeholder="e.g. Alex"
+    username = st.text_input(
+        "Username",
+        placeholder="Enter your username"
     )
 
-    participant_code = st.text_input(
-        "Private participant code",
+    password = st.text_input(
+        "Password",
         type="password",
-        placeholder="Choose something only you know"
-    )
-
-    st.info(
-        "Your participant code is used to recover "
-        "your historical statistics on another visit. "
-        "The raw code is not stored."
+        placeholder="Enter your password"
     )
 
     if st.button(
-        "Start Quiz",
+        "Log In & Start Quiz",
         type="primary",
         use_container_width=True
     ):
 
-        display_name = display_name.strip()
+        username = username.strip()
 
-        participant_code = (
-            participant_code.strip()
+        # ----------------------------------------------------
+        # Check username
+        # ----------------------------------------------------
+
+        users = st.secrets["users"]
+
+        if username not in users:
+
+            st.error(
+                "Invalid username or password."
+            )
+
+            st.stop()
+
+        # ----------------------------------------------------
+        # Check password
+        # ----------------------------------------------------
+
+        expected_password = users[username]
+
+        if password != expected_password:
+
+            st.error(
+                "Invalid username or password."
+            )
+
+            st.stop()
+
+        # ----------------------------------------------------
+        # Create participant ID
+        # ----------------------------------------------------
+
+        participant_id = create_participant_id(
+            username,
+            st.secrets["PARTICIPANT_SALT"]
         )
 
-        if not display_name:
+        # ----------------------------------------------------
+        # Save participant
+        # ----------------------------------------------------
 
-            st.warning(
-                "Please enter your name."
+        try:
+
+            save_participant(
+                participant_id,
+                username
             )
+
+        except Exception as error:
+
+            st.error(
+                "Could not connect to the database."
+            )
+
+            st.exception(error)
 
             st.stop()
 
-        if not participant_code:
+        # ----------------------------------------------------
+        # Randomize questions
+        # ----------------------------------------------------
 
-            st.warning(
-                "Please enter a private participant code."
-            )
+        question_copy = QUESTIONS.copy()
 
-            st.stop()
+        random.shuffle(
+            question_copy
+        )
 
+        # ----------------------------------------------------
+        # Store login information
+        # ----------------------------------------------------
+
+        st.session_state.quiz_started = True
+
+        st.session_state.participant_id = (
+            participant_id
+        )
+
+        st.session_state.display_name = (
+            username
+        )
+
+        st.session_state.questions = (
+            question_copy
+        )
+
+        st.session_state.current_index = 0
+
+        st.session_state.current_correct = False
+
+        st.session_state.quiz_attempts = 0
+
+        st.session_state.quiz_correct = 0
+
+        st.session_state.quiz_complete = False
+
+        st.session_state.last_feedback = ""
+
+        st.session_state.last_feedback_type = ""
+
+        st.session_state.show_explanation = False
+
+        st.rerun()
+
+    st.divider()
+
+    st.write(
+        "Please use the username and password "
+        "provided to you."
+    )
+
+    st.stop()
         # ----------------------------------------------------
         # Generate participant ID
         # ----------------------------------------------------
