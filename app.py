@@ -32,7 +32,7 @@ layout="wide",
 # as this Python file.
 
 WORD_FILE = (
-Path(**file**).parent
+Path(__file__).parent
 / "HBA - NBME Questions.docx"
 )
 
