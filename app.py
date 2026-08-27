@@ -1,4 +1,4 @@
-
+```python
 import hashlib
 import random
 import re
@@ -17,7 +17,7 @@ from supabase import create_client
 
 st.set_page_config(
     page_title="NBME Study Quiz",
-    page_icon="🧠",
+    page_icon="🧬",
     layout="wide",
 )
 
@@ -927,6 +927,18 @@ def initialize_quiz_state():
         "show_explanation": False,
 
         "flash_type": None,
+
+        # ----------------------------------------------------
+        # NEW: Consecutive wrong-answer tracking
+        # ----------------------------------------------------
+
+        "wrong_answer_streak": 0,
+
+        # ----------------------------------------------------
+        # NEW: Controls the 🫠 popup
+        # ----------------------------------------------------
+
+        "meltdown_popup": False,
     }
 
     for key, value in defaults.items():
@@ -996,6 +1008,97 @@ if st.session_state.get("flash_type"):
 
     # Clear the flash so it occurs only once.
     st.session_state.flash_type = None
+
+
+# ============================================================
+# MELTDOWN 🫠 POPUP
+# ============================================================
+
+if st.session_state.get("meltdown_popup"):
+
+    st.markdown(
+        """
+        <style>
+
+        @keyframes meltdownFloat {
+
+            0% {
+                opacity: 0;
+                transform:
+                    translate(100px, 20px)
+                    scale(0.65);
+            }
+
+            15% {
+                opacity: 1;
+                transform:
+                    translate(0, 0)
+                    scale(1);
+            }
+
+            55% {
+                opacity: 1;
+                transform:
+                    translate(-8px, -8px)
+                    scale(1.05);
+            }
+
+            75% {
+                opacity: 0.9;
+                transform:
+                    translate(-15px, -15px)
+                    scale(1.02);
+            }
+
+            100% {
+                opacity: 0;
+                transform:
+                    translate(-55px, -45px)
+                    scale(0.9);
+            }
+        }
+
+        .meltdown-popup {
+
+            position: fixed;
+
+            right: 30px;
+
+            top: 50%;
+
+            z-index: 1000000;
+
+            pointer-events: none;
+
+            font-size: 72px;
+
+            line-height: 1;
+
+            animation:
+                meltdownFloat
+                2s
+                ease-out
+                forwards;
+
+            filter:
+                drop-shadow(
+                    0 5px 12px
+                    rgba(0, 0, 0, 0.25)
+                );
+        }
+
+        </style>
+
+        <div class="meltdown-popup">
+            🫠
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    # Clear the popup state so it only happens once
+    # for each trigger.
+    st.session_state.meltdown_popup = False
 
 
 # ============================================================
@@ -1076,6 +1179,11 @@ with st.sidebar:
 
             st.session_state.flash_type = None
 
+            # Reset consecutive wrong-answer tracking.
+            st.session_state.wrong_answer_streak = 0
+
+            st.session_state.meltdown_popup = False
+
             st.rerun()
 
 
@@ -1083,7 +1191,7 @@ with st.sidebar:
 # TITLE
 # ============================================================
 
-st.title("🧠 NBME Study Quiz")
+st.title("🧬 NBME Study Quiz")
 
 st.caption(
     "Choose an answer. Incorrect answers can be "
@@ -1219,6 +1327,11 @@ if not st.session_state.quiz_started:
         st.session_state.show_explanation = False
 
         st.session_state.flash_type = None
+
+        # Reset consecutive wrong-answer tracking.
+        st.session_state.wrong_answer_streak = 0
+
+        st.session_state.meltdown_popup = False
 
         st.rerun()
 
@@ -1385,6 +1498,11 @@ if st.session_state.quiz_complete:
         st.session_state.show_explanation = False
 
         st.session_state.flash_type = None
+
+        # Reset consecutive wrong-answer tracking.
+        st.session_state.wrong_answer_streak = 0
+
+        st.session_state.meltdown_popup = False
 
         st.rerun()
 
@@ -1675,6 +1793,11 @@ for letter in [
                 "correct"
             )
 
+            # Reset the consecutive wrong-answer streak.
+            st.session_state.wrong_answer_streak = 0
+
+            st.session_state.meltdown_popup = False
+
         # ----------------------------------------------------
         # INCORRECT ANSWER
         # ----------------------------------------------------
@@ -1693,6 +1816,18 @@ for letter in [
             st.session_state.flash_type = (
                 "incorrect"
             )
+
+            # Increase the consecutive wrong-answer streak.
+            st.session_state.wrong_answer_streak += 1
+
+            # Show 🫠 starting with the SECOND
+            # consecutive wrong answer.
+            #
+            # It will also show on the third, fourth,
+            # fifth, etc. consecutive wrong attempts.
+            if st.session_state.wrong_answer_streak >= 2:
+
+                st.session_state.meltdown_popup = True
 
         st.rerun()
 
@@ -1786,4 +1921,11 @@ if st.session_state.show_explanation:
 
         st.session_state.flash_type = None
 
+        # Reset consecutive wrong-answer tracking
+        # when moving to a new question.
+        st.session_state.wrong_answer_streak = 0
+
+        st.session_state.meltdown_popup = False
+
         st.rerun()
+```
