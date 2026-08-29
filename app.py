@@ -22,16 +22,26 @@ st.set_page_config(
 
 
 # ============================================================
-# FILE LOCATION
+# FILE LOCATIONS
 # ============================================================
 
-# The Word document is stored in the same GitHub repository
-# as this Python file.
+# Every .docx file placed in the same GitHub folder as this
+# Python file becomes its own selectable "question bank" in
+# the sidebar. Files that Word creates temporarily while a
+# document is open (e.g. "~$My Doc.docx") are ignored.
 
-WORD_FILE = (
-    Path(__file__).parent
-    / "HBA - NBME Questions.docx"
-)
+APP_DIRECTORY = Path(__file__).parent
+
+
+def discover_docx_files():
+
+    files = [
+        path
+        for path in APP_DIRECTORY.glob("*.docx")
+        if not path.name.startswith("~$")
+    ]
+
+    return sorted(files, key=lambda path: path.name.lower())
 
 
 # ============================================================
@@ -386,7 +396,7 @@ def parse_explanations(explanation_text):
 
 
 # ============================================================
-# LOAD COMPLETE QUESTION BANK
+# LOAD COMPLETE QUESTION BANK (single .docx file)
 # ============================================================
 
 def load_question_bank(file_path):
@@ -463,7 +473,7 @@ def load_question_bank(file_path):
 
 
 # ============================================================
-# CACHE QUESTION BANK
+# CACHE A SINGLE QUESTION BANK FILE
 # ============================================================
 
 @st.cache_data
@@ -477,6 +487,72 @@ def load_cached_question_bank(file_path, modified_time):
     """
 
     return load_question_bank(Path(file_path))
+
+
+# ============================================================
+# BANK IDENTIFIERS
+# ============================================================
+
+def slugify(name):
+
+    slug = re.sub(r"[^a-zA-Z0-9]+", "_", name).strip("_").lower()
+
+    return slug or "bank"
+
+
+# ============================================================
+# LOAD EVERY QUESTION BANK FOUND NEXT TO THE APP
+# ============================================================
+
+def load_all_banks():
+    """
+    Discover every .docx file in the app's folder and parse
+    each one into its own independent question bank. A bank
+    that fails to parse is kept in the list (so it still shows
+    up, disabled, in the sidebar) but is flagged with an error
+    instead of crashing the whole app.
+    """
+
+    banks = []
+    seen_ids = set()
+
+    for file_path in discover_docx_files():
+
+        display_name = file_path.stem
+
+        base_id = slugify(display_name)
+        bank_id = base_id
+        suffix = 2
+
+        while bank_id in seen_ids:
+            bank_id = f"{base_id}_{suffix}"
+            suffix += 1
+
+        seen_ids.add(bank_id)
+
+        try:
+            modified_time = file_path.stat().st_mtime_ns
+
+            questions = load_cached_question_bank(
+                str(file_path),
+                modified_time
+            )
+
+            error = None
+
+        except Exception as load_error:
+            questions = []
+            error = str(load_error)
+
+        banks.append({
+            "bank_id": bank_id,
+            "display_name": display_name,
+            "path": file_path,
+            "questions": questions,
+            "error": error,
+        })
+
+    return banks
 
 
 # ============================================================
@@ -516,18 +592,23 @@ def save_participant(participant_id, display_name):
     return response
 
 
-def get_participant_cycle(participant_id):
+def get_participant_cycle(participant_id, bank_id):
     """
-    Get the participant's current "lap" through the full
+    Get the participant's current "lap" through one specific
     question bank. Defaults to 1 for a brand-new participant,
-    or if the `current_cycle` column hasn't been populated yet.
+    or for a bank they haven't started yet.
+
+    NOTE: this reads from the "participant_progress" table,
+    which needs a (participant_id, bank_id) unique constraint —
+    see the setup notes for the SQL to create it.
     """
 
     response = (
         supabase
-        .table("participants")
+        .table("participant_progress")
         .select("current_cycle")
         .eq("participant_id", participant_id)
+        .eq("bank_id", bank_id)
         .execute()
     )
 
@@ -541,13 +622,19 @@ def get_participant_cycle(participant_id):
     return cycle if cycle else 1
 
 
-def set_participant_cycle(participant_id, cycle):
+def set_participant_cycle(participant_id, bank_id, cycle):
 
     (
         supabase
-        .table("participants")
-        .update({"current_cycle": cycle})
-        .eq("participant_id", participant_id)
+        .table("participant_progress")
+        .upsert(
+            {
+                "participant_id": participant_id,
+                "bank_id": bank_id,
+                "current_cycle": cycle,
+            },
+            on_conflict="participant_id,bank_id"
+        )
         .execute()
     )
 
@@ -556,10 +643,10 @@ def set_participant_cycle(participant_id, cycle):
 # DATABASE FUNCTIONS — ANSWERS
 # ============================================================
 
-def save_answer(participant_id, display_name, question, selected_letter, cycle):
+def save_answer(participant_id, display_name, bank_id, question, selected_letter, cycle):
     """
     Save one answer attempt permanently in Supabase, tagged
-    with the cycle it belongs to.
+    with which bank and which cycle it belongs to.
     """
 
     is_correct = selected_letter == question["correct_letter"]
@@ -567,6 +654,7 @@ def save_answer(participant_id, display_name, question, selected_letter, cycle):
     record = {
         "participant_id": participant_id,
         "display_name": display_name,
+        "bank_id": bank_id,
         "question_number": question["number"],
         "selected_letter": selected_letter,
         "correct_letter": question["correct_letter"],
@@ -580,12 +668,12 @@ def save_answer(participant_id, display_name, question, selected_letter, cycle):
     return is_correct
 
 
-def get_completed_question_numbers(participant_id, cycle):
+def get_completed_question_numbers(participant_id, bank_id, cycle):
     """
     Question numbers this participant has already answered
-    CORRECTLY during the given cycle. These are excluded from
-    the shuffled queue so they aren't repeated until the whole
-    bank has been completed.
+    CORRECTLY in this bank during the given cycle. These are
+    excluded from the shuffled queue so they aren't repeated
+    until the whole bank has been completed.
     """
 
     response = (
@@ -593,6 +681,7 @@ def get_completed_question_numbers(participant_id, cycle):
         .table("answer_logs")
         .select("question_number")
         .eq("participant_id", participant_id)
+        .eq("bank_id", bank_id)
         .eq("cycle", cycle)
         .eq("is_correct", True)
         .execute()
@@ -607,27 +696,29 @@ def get_completed_question_numbers(participant_id, cycle):
 # BUILD A PARTICIPANT'S QUEUE (no-repeat, cross-session)
 # ============================================================
 
-def build_participant_queue(participant_id):
+def build_participant_queue(participant_id, bank_id):
     """
     Figure out where this participant is in their current
-    cycle through the full question bank, and hand back a
-    freshly-shuffled queue of only the questions they have
-    not yet answered correctly this cycle.
+    cycle through one specific question bank, and hand back a
+    freshly-shuffled queue of only the questions in that bank
+    they have not yet answered correctly this cycle.
 
     If they've already finished every question in the current
-    cycle (or this is being called right after finishing),
-    the cycle is advanced and a brand-new full, shuffled queue
-    is returned.
+    cycle, the cycle is advanced and a brand-new full, shuffled
+    queue is returned.
     """
 
-    cycle = get_participant_cycle(participant_id)
+    bank_questions = BANKS_BY_ID[bank_id]["questions"]
+
+    cycle = get_participant_cycle(participant_id, bank_id)
 
     completed_numbers = get_completed_question_numbers(
         participant_id,
+        bank_id,
         cycle
     )
 
-    valid_numbers = {question["number"] for question in QUESTIONS}
+    valid_numbers = {question["number"] for question in bank_questions}
 
     # Only count completions for questions that still exist —
     # an administrator may have removed one since.
@@ -635,7 +726,7 @@ def build_participant_queue(participant_id):
 
     remaining = [
         question
-        for question in QUESTIONS
+        for question in bank_questions
         if question["number"] not in completed_numbers
     ]
 
@@ -643,34 +734,36 @@ def build_participant_queue(participant_id):
 
         cycle += 1
 
-        set_participant_cycle(participant_id, cycle)
+        set_participant_cycle(participant_id, bank_id, cycle)
 
         completed_numbers = set()
 
-        remaining = QUESTIONS.copy()
+        remaining = bank_questions.copy()
 
     random.shuffle(remaining)
 
     return cycle, completed_numbers, remaining
 
 
-def reset_participant_progress(participant_id):
+def reset_participant_progress(participant_id, bank_id):
     """
-    Manually abandon the current cycle and start a fresh one,
-    even if it isn't finished yet.
+    Manually abandon the current cycle for one bank and start
+    a fresh one, even if it isn't finished yet.
     """
 
-    current_cycle = get_participant_cycle(participant_id)
+    current_cycle = get_participant_cycle(participant_id, bank_id)
 
-    set_participant_cycle(participant_id, current_cycle + 1)
+    set_participant_cycle(participant_id, bank_id, current_cycle + 1)
 
 
-def start_queue_in_session(participant_id):
+def start_queue_in_session(participant_id, bank_id):
 
     cycle, completed_numbers, remaining = build_participant_queue(
-        participant_id
+        participant_id,
+        bank_id
     )
 
+    st.session_state.selected_bank = bank_id
     st.session_state.cycle = cycle
     st.session_state.base_completed = len(completed_numbers)
     st.session_state.questions = remaining
@@ -686,13 +779,40 @@ def start_queue_in_session(participant_id):
 
 
 # ============================================================
+# SIDEBAR PROGRESS SUMMARY (used for every bank's subpanel)
+# ============================================================
+
+def get_bank_progress_summary(participant_id, bank_id):
+
+    bank_questions = BANKS_BY_ID[bank_id]["questions"]
+    total = len(bank_questions)
+
+    if total == 0:
+        return 1, 0, 0
+
+    cycle = get_participant_cycle(participant_id, bank_id)
+
+    completed_numbers = get_completed_question_numbers(
+        participant_id,
+        bank_id,
+        cycle
+    )
+
+    valid_numbers = {question["number"] for question in bank_questions}
+    completed_numbers = completed_numbers & valid_numbers
+
+    return cycle, len(completed_numbers), total
+
+
+# ============================================================
 # DATABASE FUNCTIONS — STATISTICS
 # ============================================================
 
-def get_question_stats(participant_id, question_number):
+def get_question_stats(participant_id, bank_id, question_number):
     """
-    Get historical statistics for ONE specific question,
-    both for this user (across all their cycles) and globally.
+    Get historical statistics for ONE specific question in ONE
+    specific bank, both for this user (across all their cycles)
+    and globally.
     """
 
     response = (
@@ -700,6 +820,7 @@ def get_question_stats(participant_id, question_number):
         .table("answer_logs")
         .select("selected_letter, is_correct")
         .eq("participant_id", participant_id)
+        .eq("bank_id", bank_id)
         .eq("question_number", question_number)
         .execute()
     )
@@ -727,6 +848,7 @@ def get_question_stats(participant_id, question_number):
         supabase
         .table("answer_logs")
         .select("*", count="exact", head=True)
+        .eq("bank_id", bank_id)
         .eq("question_number", question_number)
         .execute()
     )
@@ -737,6 +859,7 @@ def get_question_stats(participant_id, question_number):
         supabase
         .table("answer_logs")
         .select("*", count="exact", head=True)
+        .eq("bank_id", bank_id)
         .eq("question_number", question_number)
         .eq("is_correct", True)
         .execute()
@@ -778,11 +901,12 @@ def get_all_answers():
     return response.data or []
 
 
-def save_flag(participant_id, display_name, question_number):
+def save_flag(participant_id, display_name, bank_id, question_number):
 
     record = {
         "participant_id": participant_id,
         "display_name": display_name,
+        "bank_id": bank_id,
         "question_number": question_number,
         "flagged_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -803,19 +927,20 @@ def get_flagged_questions():
     return response.data or []
 
 
-def clear_flags_for_question(question_number):
+def clear_flags_for_question(bank_id, question_number):
 
     (
         supabase
         .table("flagged_questions")
         .delete()
+        .eq("bank_id", bank_id)
         .eq("question_number", question_number)
         .execute()
     )
 
 
 # ============================================================
-# REMOVE A QUESTION FROM THE WORD DOCUMENT
+# REMOVE A QUESTION FROM A WORD DOCUMENT
 # ============================================================
 
 def _delete_paragraph(paragraph):
@@ -952,16 +1077,18 @@ def strip_question_from_docx(file_path, question_number):
     document.save(file_path)
 
 
-def remove_question_everywhere(question_number):
+def remove_question_everywhere(bank_id, question_number):
     """
-    Strip a question from the source document and clear any
-    reports about it. Raises on failure.
+    Strip a question from its bank's source document and clear
+    any reports about it. Raises on failure.
     """
 
-    strip_question_from_docx(WORD_FILE, question_number)
+    bank = BANKS_BY_ID[bank_id]
+
+    strip_question_from_docx(bank["path"], question_number)
 
     try:
-        clear_flags_for_question(question_number)
+        clear_flags_for_question(bank_id, question_number)
     except Exception:
         # Flag cleanup is best-effort; the document edit is
         # what actually matters.
@@ -972,6 +1099,8 @@ def drop_question_from_session(question_number):
     """
     Remove a just-deleted question from the participant's
     in-progress queue so it isn't shown again this session.
+    Only relevant when the deletion happened in the bank the
+    participant currently has active.
     """
 
     st.session_state.questions = [
@@ -1001,6 +1130,7 @@ def initialize_quiz_state():
         "quiz_started": False,
         "participant_id": None,
         "display_name": "",
+        "selected_bank": None,
         "questions": [],
         "current_index": 0,
         "current_correct": False,
@@ -1012,11 +1142,14 @@ def initialize_quiz_state():
         "wrong_answer_streak": 0,
         "meltdown_popup": False,
 
-        # Cross-session, no-repeat progress tracking.
+        # Cross-session, no-repeat progress tracking
+        # (scoped to whichever bank is currently selected).
         "cycle": 1,
         "base_completed": 0,
 
-        # Flagging / admin.
+        # Flagging / admin. Flags are stored as
+        # (bank_id, question_number) tuples since question
+        # numbers can repeat across different banks.
         "flagged_this_session": set(),
         "is_admin": False,
     }
@@ -1115,22 +1248,25 @@ if st.session_state.get("meltdown_popup"):
 
 
 # ============================================================
-# LOAD QUESTIONS
+# LOAD ALL QUESTION BANKS
 # ============================================================
 
-try:
+ALL_BANKS = load_all_banks()
+BANKS_BY_ID = {bank["bank_id"]: bank for bank in ALL_BANKS}
+VALID_BANKS = [bank for bank in ALL_BANKS if not bank["error"]]
 
-    modified_time = WORD_FILE.stat().st_mtime_ns
-
-    QUESTIONS = load_cached_question_bank(
-        str(WORD_FILE),
-        modified_time
+if not ALL_BANKS:
+    st.error(
+        "No .docx question bank files were found in the app's "
+        "folder. Add one or more Word documents next to this "
+        "script in the GitHub repository."
     )
+    st.stop()
 
-except Exception as error:
-
-    st.error("There was a problem loading the question bank.")
-    st.exception(error)
+if not VALID_BANKS:
+    st.error("None of the question bank documents could be loaded.")
+    for bank in ALL_BANKS:
+        st.exception(ValueError(f"{bank['display_name']}: {bank['error']}"))
     st.stop()
 
 
@@ -1142,40 +1278,89 @@ with st.sidebar:
 
     st.title("🧠 NBME Study Quiz")
 
-    st.write(f"**Questions loaded:** {len(QUESTIONS)}")
-
-    st.divider()
-
     if st.session_state.quiz_started:
 
         st.write(f"**Participant:** {st.session_state.display_name}")
 
-        total_for_progress = len(QUESTIONS) or 1
+        st.divider()
 
-        overall_done = min(
-            st.session_state.base_completed + st.session_state.current_index,
-            total_for_progress
-        )
+        st.write("**Question Banks**")
 
-        st.write(
-            f"**Cycle {st.session_state.cycle}** — "
-            f"{overall_done} / {total_for_progress} completed"
-        )
+        for bank in ALL_BANKS:
+
+            bank_id = bank["bank_id"]
+
+            if bank["error"]:
+                st.caption(f"⚠️ {bank['display_name']} — failed to load")
+                continue
+
+            is_selected = st.session_state.selected_bank == bank_id
+
+            label = f"{'▶ ' if is_selected else ''}{bank['display_name']}"
+
+            if st.button(
+                label,
+                key=f"select_bank_{bank_id}",
+                use_container_width=True,
+                disabled=is_selected,
+            ):
+
+                try:
+                    start_queue_in_session(
+                        st.session_state.participant_id,
+                        bank_id
+                    )
+                    st.rerun()
+
+                except Exception as error:
+                    st.error(
+                        f"Could not load progress for "
+                        f"{bank['display_name']}."
+                    )
+                    st.exception(error)
+
+            try:
+                cycle, done, total = get_bank_progress_summary(
+                    st.session_state.participant_id,
+                    bank_id
+                )
+            except Exception:
+                cycle, done, total = 1, 0, len(bank["questions"])
+
+            fraction = (done / total) if total else 0.0
+
+            st.progress(min(fraction, 1.0))
+
+            cycle_note = f" · cycle {cycle}" if cycle > 1 else ""
+
+            st.caption(f"{done} / {total} completed{cycle_note}")
+
+        st.divider()
 
         if st.button(
-            "Reset My Progress",
+            "Reset Progress for This Bank",
             use_container_width=True,
             help=(
-                "Abandon the current cycle and start a brand-new "
-                "randomized pass through every question."
+                "Abandon the current cycle for the selected "
+                "bank and start a brand-new randomized pass "
+                "through it."
             )
         ):
 
-            reset_participant_progress(st.session_state.participant_id)
+            reset_participant_progress(
+                st.session_state.participant_id,
+                st.session_state.selected_bank
+            )
 
-            start_queue_in_session(st.session_state.participant_id)
+            start_queue_in_session(
+                st.session_state.participant_id,
+                st.session_state.selected_bank
+            )
 
             st.rerun()
+
+    else:
+        st.caption(f"{len(VALID_BANKS)} question bank(s) available.")
 
 
 # ============================================================
@@ -1247,8 +1432,10 @@ if not st.session_state.quiz_started:
         st.session_state.participant_id = participant_id
         st.session_state.display_name = username
 
+        default_bank_id = VALID_BANKS[0]["bank_id"]
+
         try:
-            start_queue_in_session(participant_id)
+            start_queue_in_session(participant_id, default_bank_id)
         except Exception as error:
             st.error("Could not load your progress from the database.")
             st.exception(error)
@@ -1337,40 +1524,62 @@ if admin_password:
 
         if flags:
 
-            flags_by_question = {}
+            flags_by_bank_question = {}
 
             for flag in flags:
-                flags_by_question.setdefault(
-                    flag["question_number"], []
-                ).append(flag)
 
-            for q_number in sorted(flags_by_question):
+                key = (flag.get("bank_id"), flag["question_number"])
 
-                entries = flags_by_question[q_number]
+                flags_by_bank_question.setdefault(key, []).append(flag)
+
+            sorted_keys = sorted(
+                flags_by_bank_question.keys(),
+                key=lambda item: (
+                    BANKS_BY_ID.get(item[0], {}).get(
+                        "display_name", item[0] or ""
+                    ),
+                    item[1]
+                )
+            )
+
+            for flag_bank_id, q_number in sorted_keys:
+
+                entries = flags_by_bank_question[(flag_bank_id, q_number)]
+
+                bank = BANKS_BY_ID.get(flag_bank_id)
+                bank_label = (
+                    bank["display_name"] if bank
+                    else (flag_bank_id or "Unknown bank")
+                )
 
                 col_info, col_trash = st.columns([4, 1])
 
                 with col_info:
                     st.write(
-                        f"Question **{q_number}** — "
-                        f"flagged {len(entries)} time(s)"
+                        f"**{bank_label}** — question **{q_number}** "
+                        f"— flagged {len(entries)} time(s)"
                     )
 
                 with col_trash:
 
-                    if st.button(
+                    if bank is not None and st.button(
                         "🗑️ Remove",
-                        key=f"admin_trash_{q_number}"
+                        key=f"admin_trash_{flag_bank_id}_{q_number}"
                     ):
 
                         try:
 
-                            remove_question_everywhere(q_number)
+                            remove_question_everywhere(
+                                flag_bank_id,
+                                q_number
+                            )
 
-                            drop_question_from_session(q_number)
+                            if st.session_state.selected_bank == flag_bank_id:
+                                drop_question_from_session(q_number)
 
                             st.success(
-                                f"Question {q_number} removed."
+                                f"Question {q_number} removed from "
+                                f"{bank_label}."
                             )
 
                             st.rerun()
@@ -1396,14 +1605,19 @@ st.markdown("</details>", unsafe_allow_html=True)
 # CURRENT QUIZ
 # ============================================================
 
+selected_bank_id = st.session_state.selected_bank
+current_bank = BANKS_BY_ID[selected_bank_id]
+
 questions = st.session_state.questions
 
 current_index = st.session_state.current_index
 
-total_questions_all = len(QUESTIONS)
+total_questions_all = len(current_bank["questions"])
+
+st.caption(f"**Current bank:** {current_bank['display_name']}")
 
 if total_questions_all == 0:
-    st.warning("There are no questions left in the question bank.")
+    st.warning("There are no questions left in this question bank.")
     st.stop()
 
 
@@ -1416,8 +1630,9 @@ if st.session_state.quiz_complete:
     st.success("🎉 Quiz complete!")
 
     st.write(
-        f"You've completed cycle **{st.session_state.cycle}** — "
-        f"all **{total_questions_all}** questions."
+        f"You've completed cycle **{st.session_state.cycle}** of "
+        f"**{current_bank['display_name']}** — all "
+        f"**{total_questions_all}** questions."
     )
 
     st.divider()
@@ -1433,7 +1648,10 @@ if st.session_state.quiz_complete:
         use_container_width=True
     ):
 
-        start_queue_in_session(st.session_state.participant_id)
+        start_queue_in_session(
+            st.session_state.participant_id,
+            selected_bank_id
+        )
 
         st.rerun()
 
@@ -1484,6 +1702,7 @@ try:
 
     historical_stats = get_question_stats(
         st.session_state.participant_id,
+        selected_bank_id,
         question_number
     )
 
@@ -1561,7 +1780,8 @@ flag_col, trash_col = st.columns([3, 1])
 with flag_col:
 
     already_flagged = (
-        question_number in st.session_state.flagged_this_session
+        (selected_bank_id, question_number)
+        in st.session_state.flagged_this_session
     )
 
     if already_flagged:
@@ -1572,7 +1792,7 @@ with flag_col:
 
         if st.button(
             "🚩 Report question as irrelevant",
-            key=f"flag_{question_number}"
+            key=f"flag_{selected_bank_id}_{question_number}"
         ):
 
             try:
@@ -1580,11 +1800,12 @@ with flag_col:
                 save_flag(
                     st.session_state.participant_id,
                     st.session_state.display_name,
+                    selected_bank_id,
                     question_number
                 )
 
                 st.session_state.flagged_this_session.add(
-                    question_number
+                    (selected_bank_id, question_number)
                 )
 
                 st.rerun()
@@ -1600,12 +1821,15 @@ with trash_col:
 
         if st.button(
             "🗑️ Remove question",
-            key=f"trash_{question_number}"
+            key=f"trash_{selected_bank_id}_{question_number}"
         ):
 
             try:
 
-                remove_question_everywhere(question_number)
+                remove_question_everywhere(
+                    selected_bank_id,
+                    question_number
+                )
 
                 drop_question_from_session(question_number)
 
@@ -1647,7 +1871,7 @@ for letter in ["A", "B", "C", "D", "E"]:
                 button_text,
                 disabled=True,
                 use_container_width=True,
-                key=f"disabled_{current_index}_{letter}"
+                key=f"disabled_{selected_bank_id}_{current_index}_{letter}"
             )
 
         continue
@@ -1655,7 +1879,7 @@ for letter in ["A", "B", "C", "D", "E"]:
     if st.button(
         button_text,
         use_container_width=True,
-        key=f"question_{current_index}_{letter}"
+        key=f"question_{selected_bank_id}_{current_index}_{letter}"
     ):
 
         try:
@@ -1663,6 +1887,7 @@ for letter in ["A", "B", "C", "D", "E"]:
             is_correct = save_answer(
                 st.session_state.participant_id,
                 st.session_state.display_name,
+                selected_bank_id,
                 question,
                 letter,
                 st.session_state.cycle
