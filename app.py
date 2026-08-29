@@ -1,4 +1,3 @@
-
 import hashlib
 import random
 import re
@@ -106,19 +105,11 @@ def read_word_as_text(file_path):
 
     chunks = []
 
-    # --------------------------------------------------------
-    # Normal paragraphs
-    # --------------------------------------------------------
-
     for paragraph in document.paragraphs:
         text = paragraph.text
 
         if text:
             chunks.append(text)
-
-    # --------------------------------------------------------
-    # Tables
-    # --------------------------------------------------------
 
     for table in document.tables:
         for row in table.rows:
@@ -138,15 +129,8 @@ def read_word_as_text(file_path):
 
     full_text = "\n".join(chunks)
 
-    full_text = full_text.replace(
-        "\r\n",
-        "\n"
-    )
-
-    full_text = full_text.replace(
-        "\r",
-        "\n"
-    )
+    full_text = full_text.replace("\r\n", "\n")
+    full_text = full_text.replace("\r", "\n")
 
     return full_text
 
@@ -173,6 +157,9 @@ def normalize_document_text(text):
 # IDENTIFY QUESTION NUMBER
 # ============================================================
 
+QUESTION_NUMBER_PATTERN = re.compile(r"(\d+)\s*[\.\)]?")
+
+
 def parse_question_number(line):
 
     line = clean_text(line)
@@ -180,14 +167,12 @@ def parse_question_number(line):
     line = line.replace("*", "")
 
     match = re.fullmatch(
-        r"(\d+)\s*[\.\)]?",
+        QUESTION_NUMBER_PATTERN,
         line
     )
 
     if match:
-        return int(
-            match.group(1)
-        )
+        return int(match.group(1))
 
     return None
 
@@ -196,23 +181,24 @@ def parse_question_number(line):
 # IDENTIFY ANSWER CHOICE
 # ============================================================
 
+ANSWER_CHOICE_PATTERN = re.compile(
+    r"^([A-E])\s*[\.\)]\s*(.+)$",
+    flags=re.IGNORECASE
+)
+
+
 def parse_answer_choice(line):
 
     line = clean_text(line)
 
     line = line.replace("*", "")
 
-    match = re.match(
-        r"^([A-E])\s*[\.\)]\s*(.+)$",
-        line,
-        flags=re.IGNORECASE
-    )
+    match = ANSWER_CHOICE_PATTERN.match(line)
 
     if not match:
         return None
 
     letter = match.group(1).upper()
-
     answer = match.group(2).strip()
 
     return letter, answer
@@ -233,6 +219,16 @@ def find_section(text, heading):
         return match
 
     return None
+
+
+def is_heading_paragraph(text, heading):
+
+    return bool(
+        re.fullmatch(
+            rf"(?i){re.escape(heading)}",
+            text.strip()
+        )
+    )
 
 
 # ============================================================
@@ -278,54 +274,29 @@ def parse_questions(question_text):
         if not line:
             continue
 
-        # ----------------------------------------------------
-        # New question
-        # ----------------------------------------------------
-
-        question_number = parse_question_number(
-            line
-        )
+        question_number = parse_question_number(line)
 
         if question_number is not None:
 
             save_current_question()
 
             current_number = question_number
-
             current_question_lines = []
-
             current_options = {}
 
             continue
 
-        # ----------------------------------------------------
-        # Answer option
-        # ----------------------------------------------------
+        option = parse_answer_choice(line)
 
-        option = parse_answer_choice(
-            line
-        )
-
-        if (
-            option is not None
-            and current_number is not None
-        ):
+        if option is not None and current_number is not None:
 
             letter, answer = option
-
             current_options[letter] = answer
 
             continue
 
-        # ----------------------------------------------------
-        # Regular question text
-        # ----------------------------------------------------
-
         if current_number is not None:
-
-            current_question_lines.append(
-                line
-            )
+            current_question_lines.append(line)
 
     save_current_question()
 
@@ -336,20 +307,18 @@ def parse_questions(question_text):
 # FIND EXPLANATION SECTION
 # ============================================================
 
-def extract_explanation_section(
-    full_text,
-    answer_sheet_match
-):
+HEADING_NUMBER_PATTERN = re.compile(
+    r"(?im)^\s*(\d+)\.\s+(.+?)\s*$"
+)
+
+
+def extract_explanation_section(full_text, answer_sheet_match):
 
     text_after_answer_sheet = full_text[
         answer_sheet_match.end():
     ]
 
-    heading_pattern = re.compile(
-        r"(?im)^\s*(\d+)\.\s+(.+?)\s*$"
-    )
-
-    for match in heading_pattern.finditer(
+    for match in HEADING_NUMBER_PATTERN.finditer(
         text_after_answer_sheet
     ):
 
@@ -365,9 +334,7 @@ def extract_explanation_section(
             flags=re.IGNORECASE
         ):
 
-            return text_after_answer_sheet[
-                match.start():
-            ]
+            return text_after_answer_sheet[match.start():]
 
     raise ValueError(
         "Could not find the explanation section."
@@ -382,33 +349,18 @@ def parse_explanations(explanation_text):
 
     explanations = {}
 
-    heading_pattern = re.compile(
-        r"(?im)^\s*(\d+)\.\s+(.+?)\s*$"
-    )
-
     matches = list(
-        heading_pattern.finditer(
-            explanation_text
-        )
+        HEADING_NUMBER_PATTERN.finditer(explanation_text)
     )
 
     for index, match in enumerate(matches):
 
-        number = int(
-            match.group(1)
-        )
+        number = int(match.group(1))
 
         if index + 1 < len(matches):
-
-            end = matches[
-                index + 1
-            ].start()
-
+            end = matches[index + 1].start()
         else:
-
-            end = len(
-                explanation_text
-            )
+            end = len(explanation_text)
 
         block = explanation_text[
             match.start():end
@@ -423,9 +375,7 @@ def parse_explanations(explanation_text):
         if answer_match is None:
             continue
 
-        correct_letter = answer_match.group(
-            1
-        ).upper()
+        correct_letter = answer_match.group(1).upper()
 
         explanations[number] = {
             "correct_letter": correct_letter,
@@ -448,69 +398,36 @@ def load_question_bank(file_path):
             f"{file_path}"
         )
 
-    raw_text = read_word_as_text(
-        file_path
-    )
+    raw_text = read_word_as_text(file_path)
 
-    full_text = normalize_document_text(
-        raw_text
-    )
+    full_text = normalize_document_text(raw_text)
 
-    questions_match = find_section(
-        full_text,
-        "Questions"
-    )
-
-    answer_sheet_match = find_section(
-        full_text,
-        "Answer Sheet"
-    )
+    questions_match = find_section(full_text, "Questions")
+    answer_sheet_match = find_section(full_text, "Answer Sheet")
 
     if questions_match is None:
-
         raise ValueError(
-            "Could not find 'Questions' "
-            "in the Word document."
+            "Could not find 'Questions' in the Word document."
         )
 
     if answer_sheet_match is None:
-
         raise ValueError(
-            "Could not find 'Answer Sheet' "
-            "in the Word document."
+            "Could not find 'Answer Sheet' in the Word document."
         )
-
-    # --------------------------------------------------------
-    # QUESTION SECTION
-    # --------------------------------------------------------
 
     question_section = full_text[
         questions_match.end():
         answer_sheet_match.start()
     ]
 
-    questions = parse_questions(
-        question_section
+    questions = parse_questions(question_section)
+
+    explanation_section = extract_explanation_section(
+        full_text,
+        answer_sheet_match
     )
 
-    # --------------------------------------------------------
-    # EXPLANATIONS
-    # --------------------------------------------------------
-
-    explanation_section = (
-        extract_explanation_section(
-            full_text,
-            answer_sheet_match
-        )
-    )
-
-    explanations = parse_explanations(
-        explanation_section
-    )
-
-    # --------------------------------------------------------
-    # MATCH QUESTIONS + EXPLANATIONS
-    # --------------------------------------------------------
+    explanations = parse_explanations(explanation_section)
 
     final_questions = []
 
@@ -520,46 +437,23 @@ def load_question_bank(file_path):
             continue
 
         question = questions[number]
-
         explanation = explanations[number]
 
-        correct_letter = (
-            explanation[
-                "correct_letter"
-            ]
-        )
+        correct_letter = explanation["correct_letter"]
 
-        if (
-            correct_letter
-            not in question["options"]
-        ):
+        if correct_letter not in question["options"]:
             continue
 
         final_questions.append({
-
             "number": number,
-
-            "question": question[
-                "question"
-            ],
-
-            "options": question[
-                "options"
-            ],
-
+            "question": question["question"],
+            "options": question["options"],
             "correct_letter": correct_letter,
-
-            "correct_answer": question[
-                "options"
-            ][correct_letter],
-
-            "explanation": explanation[
-                "explanation"
-            ]
+            "correct_answer": question["options"][correct_letter],
+            "explanation": explanation["explanation"]
         })
 
     if not final_questions:
-
         raise ValueError(
             "No complete questions were found "
             "in the Word document."
@@ -573,66 +467,38 @@ def load_question_bank(file_path):
 # ============================================================
 
 @st.cache_data
-def load_cached_question_bank(
-    file_path,
-    modified_time
-):
+def load_cached_question_bank(file_path, modified_time):
     """
     Cache the parsed Word document.
 
     modified_time ensures Streamlit reloads the document
-    when the Word file changes.
+    when the Word file changes (including when a question
+    is removed by an administrator).
     """
 
-    return load_question_bank(
-        Path(file_path)
-    )
+    return load_question_bank(Path(file_path))
 
 
 # ============================================================
 # PARTICIPANT ID
 # ============================================================
 
-def create_participant_id(
-    participant_code,
-    app_salt
-):
+def create_participant_id(participant_code, app_salt):
     """
     Convert a participant's private code into a
-    deterministic identifier.
-
-    The raw participant code is NOT stored.
-
-    The user can therefore return later and recover
-    their previous statistics by entering the same code.
-
-    IMPORTANT:
-    This is identification, not full authentication.
-    Users should choose a unique private code.
+    deterministic identifier. The raw code is not stored.
     """
 
-    value = (
-        str(app_salt)
-        + "|"
-        + participant_code.strip()
-    )
+    value = str(app_salt) + "|" + participant_code.strip()
 
-    return hashlib.sha256(
-        value.encode("utf-8")
-    ).hexdigest()
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 # ============================================================
-# DATABASE FUNCTIONS
+# DATABASE FUNCTIONS — PARTICIPANTS
 # ============================================================
 
-def save_participant(
-    participant_id,
-    display_name
-):
-    """
-    Save/update a participant.
-    """
+def save_participant(participant_id, display_name):
 
     response = (
         supabase
@@ -650,20 +516,53 @@ def save_participant(
     return response
 
 
-def save_answer(
-    participant_id,
-    display_name,
-    question,
-    selected_letter
-):
+def get_participant_cycle(participant_id):
     """
-    Save one answer attempt permanently in Supabase.
+    Get the participant's current "lap" through the full
+    question bank. Defaults to 1 for a brand-new participant,
+    or if the `current_cycle` column hasn't been populated yet.
     """
 
-    is_correct = (
-        selected_letter
-        == question["correct_letter"]
+    response = (
+        supabase
+        .table("participants")
+        .select("current_cycle")
+        .eq("participant_id", participant_id)
+        .execute()
     )
+
+    rows = response.data or []
+
+    if not rows:
+        return 1
+
+    cycle = rows[0].get("current_cycle")
+
+    return cycle if cycle else 1
+
+
+def set_participant_cycle(participant_id, cycle):
+
+    (
+        supabase
+        .table("participants")
+        .update({"current_cycle": cycle})
+        .eq("participant_id", participant_id)
+        .execute()
+    )
+
+
+# ============================================================
+# DATABASE FUNCTIONS — ANSWERS
+# ============================================================
+
+def save_answer(participant_id, display_name, question, selected_letter, cycle):
+    """
+    Save one answer attempt permanently in Supabase, tagged
+    with the cycle it belongs to.
+    """
+
+    is_correct = selected_letter == question["correct_letter"]
 
     record = {
         "participant_id": participant_id,
@@ -672,104 +571,136 @@ def save_answer(
         "selected_letter": selected_letter,
         "correct_letter": question["correct_letter"],
         "is_correct": is_correct,
-        "answered_at": datetime.now(
-            timezone.utc
-        ).isoformat(),
+        "cycle": cycle,
+        "answered_at": datetime.now(timezone.utc).isoformat(),
     }
 
-    (
-        supabase
-        .table("answer_logs")
-        .insert(record)
-        .execute()
-    )
+    supabase.table("answer_logs").insert(record).execute()
 
     return is_correct
 
 
-# ============================================================
-# DATABASE STATISTICS
-# ============================================================
-
-def get_overall_stats(
-    participant_id
-):
+def get_completed_question_numbers(participant_id, cycle):
     """
-    Get all answer attempts belonging to this participant.
+    Question numbers this participant has already answered
+    CORRECTLY during the given cycle. These are excluded from
+    the shuffled queue so they aren't repeated until the whole
+    bank has been completed.
     """
 
     response = (
         supabase
         .table("answer_logs")
-        .select(
-            "question_number, "
-            "selected_letter, "
-            "correct_letter, "
-            "is_correct, "
-            "answered_at"
-        )
-        .eq(
-            "participant_id",
-            participant_id
-        )
-        .order(
-            "answered_at",
-            desc=False
-        )
+        .select("question_number")
+        .eq("participant_id", participant_id)
+        .eq("cycle", cycle)
+        .eq("is_correct", True)
         .execute()
     )
 
     rows = response.data or []
 
-    total_attempts = len(rows)
+    return {row["question_number"] for row in rows}
 
-    total_correct = sum(
-        1
-        for row in rows
-        if row.get("is_correct") is True
+
+# ============================================================
+# BUILD A PARTICIPANT'S QUEUE (no-repeat, cross-session)
+# ============================================================
+
+def build_participant_queue(participant_id):
+    """
+    Figure out where this participant is in their current
+    cycle through the full question bank, and hand back a
+    freshly-shuffled queue of only the questions they have
+    not yet answered correctly this cycle.
+
+    If they've already finished every question in the current
+    cycle (or this is being called right after finishing),
+    the cycle is advanced and a brand-new full, shuffled queue
+    is returned.
+    """
+
+    cycle = get_participant_cycle(participant_id)
+
+    completed_numbers = get_completed_question_numbers(
+        participant_id,
+        cycle
     )
 
-    return rows, total_attempts, total_correct
+    valid_numbers = {question["number"] for question in QUESTIONS}
+
+    # Only count completions for questions that still exist —
+    # an administrator may have removed one since.
+    completed_numbers = completed_numbers & valid_numbers
+
+    remaining = [
+        question
+        for question in QUESTIONS
+        if question["number"] not in completed_numbers
+    ]
+
+    if not remaining:
+
+        cycle += 1
+
+        set_participant_cycle(participant_id, cycle)
+
+        completed_numbers = set()
+
+        remaining = QUESTIONS.copy()
+
+    random.shuffle(remaining)
+
+    return cycle, completed_numbers, remaining
 
 
-def get_question_stats(
-    participant_id,
-    question_number
-):
+def reset_participant_progress(participant_id):
     """
-    Get historical statistics for ONE specific question.
-
-    USER:
-    - attempts
-    - correct answers
-    - accuracy
-    - answer distribution
-
-    GLOBAL:
-    - attempts
-    - correct answers
-    - accuracy
+    Manually abandon the current cycle and start a fresh one,
+    even if it isn't finished yet.
     """
 
-    # ========================================================
-    # THIS USER'S STATISTICS FOR THIS QUESTION
-    # ========================================================
+    current_cycle = get_participant_cycle(participant_id)
+
+    set_participant_cycle(participant_id, current_cycle + 1)
+
+
+def start_queue_in_session(participant_id):
+
+    cycle, completed_numbers, remaining = build_participant_queue(
+        participant_id
+    )
+
+    st.session_state.cycle = cycle
+    st.session_state.base_completed = len(completed_numbers)
+    st.session_state.questions = remaining
+    st.session_state.current_index = 0
+    st.session_state.current_correct = False
+    st.session_state.quiz_complete = False
+    st.session_state.last_feedback = ""
+    st.session_state.last_feedback_type = ""
+    st.session_state.show_explanation = False
+    st.session_state.flash_type = None
+    st.session_state.wrong_answer_streak = 0
+    st.session_state.meltdown_popup = False
+
+
+# ============================================================
+# DATABASE FUNCTIONS — STATISTICS
+# ============================================================
+
+def get_question_stats(participant_id, question_number):
+    """
+    Get historical statistics for ONE specific question,
+    both for this user (across all their cycles) and globally.
+    """
 
     response = (
         supabase
         .table("answer_logs")
-        .select(
-            "selected_letter, "
-            "is_correct"
-        )
-        .eq(
-            "participant_id",
-            participant_id
-        )
-        .eq(
-            "question_number",
-            question_number
-        )
+        .select("selected_letter, is_correct")
+        .eq("participant_id", participant_id)
+        .eq("question_number", question_number)
         .execute()
     )
 
@@ -778,91 +709,43 @@ def get_question_stats(
     attempts = len(rows)
 
     correct = sum(
-        1
-        for row in rows
-        if row.get("is_correct") is True
+        1 for row in rows if row.get("is_correct") is True
     )
 
-    answer_counts = {
-        "A": 0,
-        "B": 0,
-        "C": 0,
-        "D": 0,
-        "E": 0,
-    }
+    answer_counts = {"A": 0, "B": 0, "C": 0, "D": 0, "E": 0}
 
     for row in rows:
 
-        letter = row.get(
-            "selected_letter"
-        )
+        letter = row.get("selected_letter")
 
         if letter in answer_counts:
-
             answer_counts[letter] += 1
 
-    user_accuracy = (
-        correct
-        / attempts
-        * 100
-        if attempts
-        else 0
-    )
-
-    # ========================================================
-    # GLOBAL STATISTICS FOR THIS QUESTION
-    # ========================================================
+    user_accuracy = (correct / attempts * 100) if attempts else 0
 
     global_response = (
         supabase
         .table("answer_logs")
-        .select(
-            "*",
-            count="exact",
-            head=True
-        )
-        .eq(
-            "question_number",
-            question_number
-        )
+        .select("*", count="exact", head=True)
+        .eq("question_number", question_number)
         .execute()
     )
 
-    global_attempts = (
-        global_response.count or 0
-    )
-
-    # --------------------------------------------------------
-    # Global correct attempts
-    # --------------------------------------------------------
+    global_attempts = global_response.count or 0
 
     global_correct_response = (
         supabase
         .table("answer_logs")
-        .select(
-            "*",
-            count="exact",
-            head=True
-        )
-        .eq(
-            "question_number",
-            question_number
-        )
-        .eq(
-            "is_correct",
-            True
-        )
+        .select("*", count="exact", head=True)
+        .eq("question_number", question_number)
+        .eq("is_correct", True)
         .execute()
     )
 
-    global_correct = (
-        global_correct_response.count or 0
-    )
+    global_correct = global_correct_response.count or 0
 
     global_accuracy = (
-        global_correct
-        / global_attempts
-        * 100
+        (global_correct / global_attempts * 100)
         if global_attempts
         else 0
     )
@@ -888,14 +771,224 @@ def get_all_answers():
         supabase
         .table("answer_logs")
         .select("*")
-        .order(
-            "answered_at",
-            desc=True
-        )
+        .order("answered_at", desc=True)
         .execute()
     )
 
     return response.data or []
+
+
+def save_flag(participant_id, display_name, question_number):
+
+    record = {
+        "participant_id": participant_id,
+        "display_name": display_name,
+        "question_number": question_number,
+        "flagged_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    supabase.table("flagged_questions").insert(record).execute()
+
+
+def get_flagged_questions():
+
+    response = (
+        supabase
+        .table("flagged_questions")
+        .select("*")
+        .order("flagged_at", desc=True)
+        .execute()
+    )
+
+    return response.data or []
+
+
+def clear_flags_for_question(question_number):
+
+    (
+        supabase
+        .table("flagged_questions")
+        .delete()
+        .eq("question_number", question_number)
+        .execute()
+    )
+
+
+# ============================================================
+# REMOVE A QUESTION FROM THE WORD DOCUMENT
+# ============================================================
+
+def _delete_paragraph(paragraph):
+
+    element = paragraph._element
+    element.getparent().remove(element)
+
+
+def strip_question_from_docx(file_path, question_number):
+    """
+    Permanently delete a question — its prompt, its answer
+    choices, its entry in the plain answer-key list, and its
+    explanation block — from the Word document on disk.
+
+    NOTE: this only removes content that lives in normal
+    paragraphs (which is how this document is structured).
+    If a particular question's choices were placed inside a
+    Word table instead, they will need to be removed by hand.
+    """
+
+    document = Document(file_path)
+
+    paragraphs = document.paragraphs
+
+    questions_heading_index = None
+    answer_sheet_heading_index = None
+
+    for index, paragraph in enumerate(paragraphs):
+
+        text = clean_text(paragraph.text)
+
+        if (
+            questions_heading_index is None
+            and is_heading_paragraph(text, "Questions")
+        ):
+            questions_heading_index = index
+            continue
+
+        if is_heading_paragraph(text, "Answer Sheet"):
+            answer_sheet_heading_index = index
+            break
+
+    if questions_heading_index is None or answer_sheet_heading_index is None:
+        raise ValueError(
+            "Could not locate the document's Questions / "
+            "Answer Sheet sections."
+        )
+
+    to_delete = []
+
+    # --------------------------------------------------
+    # The question prompt + its answer choices
+    # --------------------------------------------------
+
+    in_target_question = False
+
+    for index in range(
+        questions_heading_index + 1,
+        answer_sheet_heading_index
+    ):
+
+        paragraph = paragraphs[index]
+        text = clean_text(paragraph.text)
+
+        if not text:
+            continue
+
+        number_match = re.fullmatch(
+            QUESTION_NUMBER_PATTERN,
+            text.replace("*", "")
+        )
+
+        if number_match:
+
+            in_target_question = (
+                int(number_match.group(1)) == question_number
+            )
+
+            if in_target_question:
+                to_delete.append(paragraph)
+
+            continue
+
+        if in_target_question:
+            to_delete.append(paragraph)
+
+    # --------------------------------------------------
+    # The answer-key entry AND the explanation block
+    # (both are "N. ..." headings after "Answer Sheet")
+    # --------------------------------------------------
+
+    heading_indices = []
+
+    for index in range(
+        answer_sheet_heading_index + 1,
+        len(paragraphs)
+    ):
+
+        text = clean_text(paragraphs[index].text)
+
+        if not text:
+            continue
+
+        if HEADING_NUMBER_PATTERN.fullmatch(text):
+            heading_indices.append(index)
+
+    for position, index in enumerate(heading_indices):
+
+        text = clean_text(paragraphs[index].text)
+        match = HEADING_NUMBER_PATTERN.fullmatch(text)
+        number = int(match.group(1))
+
+        if number != question_number:
+            continue
+
+        end_index = (
+            heading_indices[position + 1]
+            if position + 1 < len(heading_indices)
+            else len(paragraphs)
+        )
+
+        for inner_index in range(index, end_index):
+            to_delete.append(paragraphs[inner_index])
+
+    if not to_delete:
+        raise ValueError(
+            f"Question {question_number} could not be found "
+            "in the Word document."
+        )
+
+    for paragraph in to_delete:
+        _delete_paragraph(paragraph)
+
+    document.save(file_path)
+
+
+def remove_question_everywhere(question_number):
+    """
+    Strip a question from the source document and clear any
+    reports about it. Raises on failure.
+    """
+
+    strip_question_from_docx(WORD_FILE, question_number)
+
+    try:
+        clear_flags_for_question(question_number)
+    except Exception:
+        # Flag cleanup is best-effort; the document edit is
+        # what actually matters.
+        pass
+
+
+def drop_question_from_session(question_number):
+    """
+    Remove a just-deleted question from the participant's
+    in-progress queue so it isn't shown again this session.
+    """
+
+    st.session_state.questions = [
+        question
+        for question in st.session_state.questions
+        if question["number"] != question_number
+    ]
+
+    st.session_state.show_explanation = False
+    st.session_state.current_correct = False
+    st.session_state.last_feedback = ""
+    st.session_state.last_feedback_type = ""
+    st.session_state.flash_type = None
+
+    if st.session_state.current_index >= len(st.session_state.questions):
+        st.session_state.quiz_complete = True
+        st.session_state.current_index = 0
 
 
 # ============================================================
@@ -905,46 +998,32 @@ def get_all_answers():
 def initialize_quiz_state():
 
     defaults = {
-
         "quiz_started": False,
-
         "participant_id": None,
-
         "display_name": "",
-
         "questions": [],
-
         "current_index": 0,
-
         "current_correct": False,
-
         "quiz_complete": False,
-
         "last_feedback": "",
-
         "last_feedback_type": "",
-
         "show_explanation": False,
-
         "flash_type": None,
-
-        # ----------------------------------------------------
-        # NEW: Consecutive wrong-answer tracking
-        # ----------------------------------------------------
-
         "wrong_answer_streak": 0,
-
-        # ----------------------------------------------------
-        # NEW: Controls the 🫠 popup
-        # ----------------------------------------------------
-
         "meltdown_popup": False,
+
+        # Cross-session, no-repeat progress tracking.
+        "cycle": 1,
+        "base_completed": 0,
+
+        # Flagging / admin.
+        "flagged_this_session": set(),
+        "is_admin": False,
     }
 
     for key, value in defaults.items():
 
         if key not in st.session_state:
-
             st.session_state[key] = value
 
 
@@ -958,11 +1037,8 @@ initialize_quiz_state()
 if st.session_state.get("flash_type"):
 
     if st.session_state.flash_type == "correct":
-
         flash_color = "rgba(0, 200, 0, 0.40)"
-
     else:
-
         flash_color = "rgba(255, 0, 0, 0.40)"
 
     st.markdown(
@@ -970,21 +1046,10 @@ if st.session_state.get("flash_type"):
         <style>
 
         @keyframes answerFlash {{
-            0% {{
-                opacity: 0;
-            }}
-
-            20% {{
-                opacity: 1;
-            }}
-
-            60% {{
-                opacity: 1;
-            }}
-
-            100% {{
-                opacity: 0;
-            }}
+            0% {{ opacity: 0; }}
+            20% {{ opacity: 1; }}
+            60% {{ opacity: 1; }}
+            100% {{ opacity: 0; }}
         }}
 
         .answer-flash {{
@@ -1006,7 +1071,6 @@ if st.session_state.get("flash_type"):
         unsafe_allow_html=True
     )
 
-    # Clear the flash so it occurs only once.
     st.session_state.flash_type = None
 
 
@@ -1021,83 +1085,32 @@ if st.session_state.get("meltdown_popup"):
         <style>
 
         @keyframes meltdownFloat {
-
-            0% {
-                opacity: 0;
-                transform:
-                    translate(100px, 20px)
-                    scale(0.65);
-            }
-
-            15% {
-                opacity: 1;
-                transform:
-                    translate(0, 0)
-                    scale(1);
-            }
-
-            55% {
-                opacity: 1;
-                transform:
-                    translate(-8px, -8px)
-                    scale(1.05);
-            }
-
-            75% {
-                opacity: 0.9;
-                transform:
-                    translate(-15px, -15px)
-                    scale(1.02);
-            }
-
-            100% {
-                opacity: 0;
-                transform:
-                    translate(-55px, -45px)
-                    scale(0.9);
-            }
+            0% { opacity: 0; transform: translate(100px, 20px) scale(0.65); }
+            15% { opacity: 1; transform: translate(0, 0) scale(1); }
+            55% { opacity: 1; transform: translate(-8px, -8px) scale(1.05); }
+            75% { opacity: 0.9; transform: translate(-15px, -15px) scale(1.02); }
+            100% { opacity: 0; transform: translate(-55px, -45px) scale(0.9); }
         }
 
         .meltdown-popup {
-
             position: fixed;
-
             right: 30px;
-
             top: 50%;
-
             z-index: 1000000;
-
             pointer-events: none;
-
             font-size: 72px;
-
             line-height: 1;
-
-            animation:
-                meltdownFloat
-                2s
-                ease-out
-                forwards;
-
-            filter:
-                drop-shadow(
-                    0 5px 12px
-                    rgba(0, 0, 0, 0.25)
-                );
+            animation: meltdownFloat 2s ease-out forwards;
+            filter: drop-shadow(0 5px 12px rgba(0, 0, 0, 0.25));
         }
 
         </style>
 
-        <div class="meltdown-popup">
-            🫠
-        </div>
+        <div class="meltdown-popup">🫠</div>
         """,
         unsafe_allow_html=True
     )
 
-    # Clear the popup state so it only happens once
-    # for each trigger.
     st.session_state.meltdown_popup = False
 
 
@@ -1107,9 +1120,7 @@ if st.session_state.get("meltdown_popup"):
 
 try:
 
-    modified_time = (
-        WORD_FILE.stat().st_mtime_ns
-    )
+    modified_time = WORD_FILE.stat().st_mtime_ns
 
     QUESTIONS = load_cached_question_bank(
         str(WORD_FILE),
@@ -1118,13 +1129,8 @@ try:
 
 except Exception as error:
 
-    st.error(
-        "There was a problem loading the "
-        "question bank."
-    )
-
+    st.error("There was a problem loading the question bank.")
     st.exception(error)
-
     st.stop()
 
 
@@ -1136,53 +1142,38 @@ with st.sidebar:
 
     st.title("🧠 NBME Study Quiz")
 
-    st.write(
-        f"**Questions loaded:** {len(QUESTIONS)}"
-    )
+    st.write(f"**Questions loaded:** {len(QUESTIONS)}")
 
     st.divider()
 
     if st.session_state.quiz_started:
 
+        st.write(f"**Participant:** {st.session_state.display_name}")
+
+        total_for_progress = len(QUESTIONS) or 1
+
+        overall_done = min(
+            st.session_state.base_completed + st.session_state.current_index,
+            total_for_progress
+        )
+
         st.write(
-            f"**Participant:** "
-            f"{st.session_state.display_name}"
+            f"**Cycle {st.session_state.cycle}** — "
+            f"{overall_done} / {total_for_progress} completed"
         )
 
         if st.button(
-            "Restart Quiz",
-            use_container_width=True
+            "Reset My Progress",
+            use_container_width=True,
+            help=(
+                "Abandon the current cycle and start a brand-new "
+                "randomized pass through every question."
+            )
         ):
 
-            # Start a brand-new randomized quiz.
-            new_questions = QUESTIONS.copy()
+            reset_participant_progress(st.session_state.participant_id)
 
-            random.shuffle(
-                new_questions
-            )
-
-            st.session_state.questions = (
-                new_questions
-            )
-
-            st.session_state.current_index = 0
-
-            st.session_state.current_correct = False
-
-            st.session_state.quiz_complete = False
-
-            st.session_state.last_feedback = ""
-
-            st.session_state.last_feedback_type = ""
-
-            st.session_state.show_explanation = False
-
-            st.session_state.flash_type = None
-
-            # Reset consecutive wrong-answer tracking.
-            st.session_state.wrong_answer_streak = 0
-
-            st.session_state.meltdown_popup = False
+            start_queue_in_session(st.session_state.participant_id)
 
             st.rerun()
 
@@ -1195,7 +1186,9 @@ st.title("🧬 NBME Study Quiz")
 
 st.caption(
     "Choose an answer. Incorrect answers can be "
-    "retried until the correct answer is selected."
+    "retried until the correct answer is selected. "
+    "Every question in the bank is asked once per cycle, "
+    "in a random order, before anything repeats."
 )
 
 
@@ -1205,9 +1198,7 @@ st.caption(
 
 if not st.session_state.quiz_started:
 
-    st.subheader(
-        "Log in to start"
-    )
+    st.subheader("Log in to start")
 
     username = st.text_input(
         "Username",
@@ -1228,119 +1219,46 @@ if not st.session_state.quiz_started:
 
         username = username.strip()
 
-        # ----------------------------------------------------
-        # CHECK USERNAME
-        # ----------------------------------------------------
-
         users = st.secrets["users"]
 
         if username not in users:
-
-            st.error(
-                "Invalid username or password."
-            )
-
+            st.error("Invalid username or password.")
             st.stop()
-
-        # ----------------------------------------------------
-        # CHECK PASSWORD
-        # ----------------------------------------------------
 
         expected_password = users[username]
 
         if password != expected_password:
-
-            st.error(
-                "Invalid username or password."
-            )
-
+            st.error("Invalid username or password.")
             st.stop()
-
-        # ----------------------------------------------------
-        # CREATE PARTICIPANT ID
-        # ----------------------------------------------------
 
         participant_id = create_participant_id(
             username,
             st.secrets["PARTICIPANT_SALT"]
         )
 
-        # ----------------------------------------------------
-        # SAVE PARTICIPANT
-        # ----------------------------------------------------
-
         try:
-
-            save_participant(
-                participant_id,
-                username
-            )
-
+            save_participant(participant_id, username)
         except Exception as error:
-
-            st.error(
-                "Could not connect to the database."
-            )
-
+            st.error("Could not connect to the database.")
             st.exception(error)
-
             st.stop()
 
-        # ----------------------------------------------------
-        # RANDOMIZE QUESTIONS
-        # ----------------------------------------------------
-
-        question_copy = QUESTIONS.copy()
-
-        random.shuffle(
-            question_copy
-        )
-
-        # ----------------------------------------------------
-        # STORE LOGIN INFORMATION
-        # ----------------------------------------------------
-
         st.session_state.quiz_started = True
+        st.session_state.participant_id = participant_id
+        st.session_state.display_name = username
 
-        st.session_state.participant_id = (
-            participant_id
-        )
-
-        st.session_state.display_name = (
-            username
-        )
-
-        st.session_state.questions = (
-            question_copy
-        )
-
-        st.session_state.current_index = 0
-
-        st.session_state.current_correct = False
-
-        st.session_state.quiz_complete = False
-
-        st.session_state.last_feedback = ""
-
-        st.session_state.last_feedback_type = ""
-
-        st.session_state.show_explanation = False
-
-        st.session_state.flash_type = None
-
-        # Reset consecutive wrong-answer tracking.
-        st.session_state.wrong_answer_streak = 0
-
-        st.session_state.meltdown_popup = False
+        try:
+            start_queue_in_session(participant_id)
+        except Exception as error:
+            st.error("Could not load your progress from the database.")
+            st.exception(error)
+            st.stop()
 
         st.rerun()
 
     st.divider()
 
-    st.write(
-        "Please use the username and password "
-        "provided to you."
-    )
+    st.write("Please use the username and password provided to you.")
 
     st.stop()
 
@@ -1359,20 +1277,19 @@ st.markdown(
 
 admin_password = st.text_input(
     "Administrator password",
-    type="password"
+    type="password",
+    key="admin_password_input"
 )
 
 if admin_password:
 
-    expected_password = st.secrets[
-        "ADMIN_PASSWORD"
-    ]
+    expected_password = st.secrets["ADMIN_PASSWORD"]
 
     if admin_password == expected_password:
 
-        st.success(
-            "Administrator access granted."
-        )
+        st.session_state.is_admin = True
+
+        st.success("Administrator access granted.")
 
         try:
 
@@ -1380,58 +1297,99 @@ if admin_password:
 
             if all_answers:
 
-                admin_df = pd.DataFrame(
-                    all_answers
-                )
+                admin_df = pd.DataFrame(all_answers)
 
                 st.write(
-                    f"Total recorded answer attempts: "
-                    f"{len(admin_df):,}"
+                    f"Total recorded answer attempts: {len(admin_df):,}"
                 )
 
-                st.dataframe(
-                    admin_df,
-                    use_container_width=True
-                )
+                st.dataframe(admin_df, use_container_width=True)
 
-                csv_data = admin_df.to_csv(
-                    index=False
-                ).encode("utf-8")
+                csv_data = admin_df.to_csv(index=False).encode("utf-8")
 
                 st.download_button(
                     label="Download CSV",
                     data=csv_data,
-                    file_name=(
-                        "nbme_quiz_results.csv"
-                    ),
+                    file_name="nbme_quiz_results.csv",
                     mime="text/csv"
                 )
 
             else:
+                st.info("No answer records yet.")
 
-                st.info(
-                    "No answer records yet."
-                )
+        except Exception as error:
+            st.error("Could not load administrator data.")
+            st.exception(error)
+
+        st.divider()
+
+        st.write("**🚩 Flagged Questions**")
+
+        try:
+
+            flags = get_flagged_questions()
 
         except Exception as error:
 
-            st.error(
-                "Could not load administrator data."
-            )
-
+            flags = []
+            st.error("Could not load flagged questions.")
             st.exception(error)
 
+        if flags:
+
+            flags_by_question = {}
+
+            for flag in flags:
+                flags_by_question.setdefault(
+                    flag["question_number"], []
+                ).append(flag)
+
+            for q_number in sorted(flags_by_question):
+
+                entries = flags_by_question[q_number]
+
+                col_info, col_trash = st.columns([4, 1])
+
+                with col_info:
+                    st.write(
+                        f"Question **{q_number}** — "
+                        f"flagged {len(entries)} time(s)"
+                    )
+
+                with col_trash:
+
+                    if st.button(
+                        "🗑️ Remove",
+                        key=f"admin_trash_{q_number}"
+                    ):
+
+                        try:
+
+                            remove_question_everywhere(q_number)
+
+                            drop_question_from_session(q_number)
+
+                            st.success(
+                                f"Question {q_number} removed."
+                            )
+
+                            st.rerun()
+
+                        except Exception as error:
+
+                            st.error(
+                                "Could not remove the question."
+                            )
+
+                            st.exception(error)
+
+        else:
+            st.caption("No questions have been flagged.")
+
     else:
+        st.error("Incorrect administrator password.")
 
-        st.error(
-            "Incorrect administrator password."
-        )
-
-
-st.markdown(
-    "</details>",
-    unsafe_allow_html=True
-)
+st.markdown("</details>", unsafe_allow_html=True)
 
 
 # ============================================================
@@ -1442,6 +1400,12 @@ questions = st.session_state.questions
 
 current_index = st.session_state.current_index
 
+total_questions_all = len(QUESTIONS)
+
+if total_questions_all == 0:
+    st.warning("There are no questions left in the question bank.")
+    st.stop()
+
 
 # ============================================================
 # FINISHED
@@ -1449,17 +1413,11 @@ current_index = st.session_state.current_index
 
 if st.session_state.quiz_complete:
 
-    st.success(
-        "🎉 Quiz complete!"
-    )
-
-    total_questions = len(
-        questions
-    )
+    st.success("🎉 Quiz complete!")
 
     st.write(
-        f"You completed all **{total_questions}** "
-        "questions."
+        f"You've completed cycle **{st.session_state.cycle}** — "
+        f"all **{total_questions_all}** questions."
     )
 
     st.divider()
@@ -1475,34 +1433,7 @@ if st.session_state.quiz_complete:
         use_container_width=True
     ):
 
-        new_questions = QUESTIONS.copy()
-
-        random.shuffle(
-            new_questions
-        )
-
-        st.session_state.questions = (
-            new_questions
-        )
-
-        st.session_state.current_index = 0
-
-        st.session_state.current_correct = False
-
-        st.session_state.quiz_complete = False
-
-        st.session_state.last_feedback = ""
-
-        st.session_state.last_feedback_type = ""
-
-        st.session_state.show_explanation = False
-
-        st.session_state.flash_type = None
-
-        # Reset consecutive wrong-answer tracking.
-        st.session_state.wrong_answer_streak = 0
-
-        st.session_state.meltdown_popup = False
+        start_queue_in_session(st.session_state.participant_id)
 
         st.rerun()
 
@@ -1513,36 +1444,35 @@ if st.session_state.quiz_complete:
 # CURRENT QUESTION
 # ============================================================
 
-question = questions[current_index]
+if current_index >= len(questions):
+    # Safety net: the queue emptied out unexpectedly
+    # (e.g. the last remaining question was just removed).
+    st.session_state.quiz_complete = True
+    st.rerun()
 
+question = questions[current_index]
 question_number = question["number"]
 
-total_questions = len(
-    questions
-)
-
 
 # ============================================================
-# PROGRESS
+# PROGRESS (consistent with overall cycle progress, not
+# just position within this session's remaining queue)
 # ============================================================
 
-progress = (
-    (current_index + 1)
-    / total_questions
+overall_position = min(
+    st.session_state.base_completed + current_index + 1,
+    total_questions_all
 )
 
-st.progress(
-    progress
-)
+progress = overall_position / total_questions_all
 
-st.write(
-    f"### Question {current_index + 1} "
-    f"of {total_questions}"
-)
+st.progress(min(progress, 1.0))
+
+st.write(f"### Question {overall_position} of {total_questions_all}")
 
 st.caption(
-    f"Document question number: "
-    f"{question_number}"
+    f"Cycle {st.session_state.cycle} · "
+    f"Document question number: {question_number}"
 )
 
 
@@ -1563,107 +1493,46 @@ except Exception:
         "attempts": 0,
         "correct": 0,
         "accuracy": 0,
-        "answers": {
-            "A": 0,
-            "B": 0,
-            "C": 0,
-            "D": 0,
-            "E": 0,
-        },
+        "answers": {"A": 0, "B": 0, "C": 0, "D": 0, "E": 0},
         "global_attempts": 0,
         "global_correct": 0,
         "global_accuracy": 0,
     }
 
+historical_attempts = historical_stats["attempts"]
+historical_accuracy = historical_stats["accuracy"]
 
-# ============================================================
-# USER STATISTICS FOR CURRENT QUESTION
-# ============================================================
+global_attempts = historical_stats["global_attempts"]
+global_accuracy = historical_stats["global_accuracy"]
 
-historical_attempts = (
-    historical_stats["attempts"]
-)
-
-historical_correct = (
-    historical_stats["correct"]
-)
-
-historical_accuracy = (
-    historical_stats["accuracy"]
-)
-
-
-# ============================================================
-# GLOBAL STATISTICS FOR CURRENT QUESTION
-# ============================================================
-
-global_attempts = (
-    historical_stats["global_attempts"]
-)
-
-global_correct = (
-    historical_stats["global_correct"]
-)
-
-global_accuracy = (
-    historical_stats["global_accuracy"]
-)
-
-
-# ============================================================
-# HISTORICAL DISPLAY
-# ============================================================
 
 if historical_attempts > 0:
 
     distribution_parts = []
 
-    for letter in [
-        "A",
-        "B",
-        "C",
-        "D",
-        "E"
-    ]:
+    for letter in ["A", "B", "C", "D", "E"]:
 
-        count = (
-            historical_stats[
-                "answers"
-            ].get(letter, 0)
-        )
+        count = historical_stats["answers"].get(letter, 0)
 
-        percentage = (
-            count
-            / historical_attempts
-            * 100
-        )
+        percentage = count / historical_attempts * 100
 
-        distribution_parts.append(
-            f"{letter}: {percentage:.0f}%"
-        )
+        distribution_parts.append(f"{letter}: {percentage:.0f}%")
 
     if global_attempts > 0:
 
         st.caption(
-            f"Your previous attempts: "
-            f"**{historical_attempts}** | "
-            f"Your historical accuracy: "
-            f"**{historical_accuracy:.0f}%** | "
-            f"Global historical accuracy: "
-            f"**{global_accuracy:.0f}%** | "
-            f"Previously selected: "
-            f"{' '.join(distribution_parts)}"
+            f"Your previous attempts: **{historical_attempts}** | "
+            f"Your historical accuracy: **{historical_accuracy:.0f}%** | "
+            f"Global historical accuracy: **{global_accuracy:.0f}%** | "
+            f"Previously selected: {' '.join(distribution_parts)}"
         )
 
     else:
 
         st.caption(
-            f"Your previous attempts: "
-            f"**{historical_attempts}** | "
-            f"Your historical accuracy: "
-            f"**{historical_accuracy:.0f}%** | "
-            f"Global historical accuracy: "
-            f"No previous attempts"
+            f"Your previous attempts: **{historical_attempts}** | "
+            f"Your historical accuracy: **{historical_accuracy:.0f}%** | "
+            f"Global historical accuracy: No previous attempts"
         )
 
 else:
@@ -1672,8 +1541,7 @@ else:
 
         st.caption(
             "Your previous attempts: **none** | "
-            f"Global historical accuracy: "
-            f"**{global_accuracy:.0f}%**"
+            f"Global historical accuracy: **{global_accuracy:.0f}%**"
         )
 
     else:
@@ -1685,53 +1553,96 @@ else:
 
 
 # ============================================================
+# REPORT / REMOVE ROW
+# ============================================================
+
+flag_col, trash_col = st.columns([3, 1])
+
+with flag_col:
+
+    already_flagged = (
+        question_number in st.session_state.flagged_this_session
+    )
+
+    if already_flagged:
+
+        st.caption("🚩 Reported — thank you")
+
+    else:
+
+        if st.button(
+            "🚩 Report question as irrelevant",
+            key=f"flag_{question_number}"
+        ):
+
+            try:
+
+                save_flag(
+                    st.session_state.participant_id,
+                    st.session_state.display_name,
+                    question_number
+                )
+
+                st.session_state.flagged_this_session.add(
+                    question_number
+                )
+
+                st.rerun()
+
+            except Exception as error:
+
+                st.error("Could not save your report.")
+                st.exception(error)
+
+with trash_col:
+
+    if st.session_state.is_admin:
+
+        if st.button(
+            "🗑️ Remove question",
+            key=f"trash_{question_number}"
+        ):
+
+            try:
+
+                remove_question_everywhere(question_number)
+
+                drop_question_from_session(question_number)
+
+                st.success(f"Question {question_number} removed.")
+
+                st.rerun()
+
+            except Exception as error:
+
+                st.error("Could not remove the question.")
+                st.exception(error)
+
+
+# ============================================================
 # QUESTION
 # ============================================================
 
-st.markdown(
-    f"### {question['question']}"
-)
+st.markdown(f"### {question['question']}")
 
 
 # ============================================================
 # ANSWER BUTTONS
 # ============================================================
 
-for letter in [
-    "A",
-    "B",
-    "C",
-    "D",
-    "E"
-]:
+for letter in ["A", "B", "C", "D", "E"]:
 
     if letter not in question["options"]:
         continue
 
-    option_text = (
-        question[
-            "options"
-        ][letter]
-    )
-
-    button_text = (
-        f"{letter}. {option_text}"
-    )
-
-    # --------------------------------------------------------
-    # CORRECT / WRONG DISPLAY
-    # --------------------------------------------------------
+    option_text = question["options"][letter]
+    button_text = f"{letter}. {option_text}"
 
     if st.session_state.current_correct:
 
         if letter == question["correct_letter"]:
-
-            st.success(
-                button_text
-            )
-
+            st.success(button_text)
         else:
-
             st.button(
                 button_text,
                 disabled=True,
@@ -1740,10 +1651,6 @@ for letter in [
             )
 
         continue
-
-    # --------------------------------------------------------
-    # NORMAL BUTTON
-    # --------------------------------------------------------
 
     if st.button(
         button_text,
@@ -1757,76 +1664,34 @@ for letter in [
                 st.session_state.participant_id,
                 st.session_state.display_name,
                 question,
-                letter
+                letter,
+                st.session_state.cycle
             )
 
         except Exception as error:
 
-            st.error(
-                "Your answer could not be saved."
-            )
-
+            st.error("Your answer could not be saved.")
             st.exception(error)
-
             st.stop()
-
-        # ----------------------------------------------------
-        # CORRECT ANSWER
-        # ----------------------------------------------------
 
         if is_correct:
 
             st.session_state.current_correct = True
-
-            st.session_state.last_feedback = (
-                "✓ Correct!"
-            )
-
-            st.session_state.last_feedback_type = (
-                "correct"
-            )
-
+            st.session_state.last_feedback = "✓ Correct!"
+            st.session_state.last_feedback_type = "correct"
             st.session_state.show_explanation = True
-
-            # Green screen flash
-            st.session_state.flash_type = (
-                "correct"
-            )
-
-            # Reset the consecutive wrong-answer streak.
+            st.session_state.flash_type = "correct"
             st.session_state.wrong_answer_streak = 0
-
             st.session_state.meltdown_popup = False
-
-        # ----------------------------------------------------
-        # INCORRECT ANSWER
-        # ----------------------------------------------------
 
         else:
 
-            st.session_state.last_feedback = (
-                "✗ Incorrect — try again."
-            )
-
-            st.session_state.last_feedback_type = (
-                "incorrect"
-            )
-
-            # Red screen flash
-            st.session_state.flash_type = (
-                "incorrect"
-            )
-
-            # Increase the consecutive wrong-answer streak.
+            st.session_state.last_feedback = "✗ Incorrect — try again."
+            st.session_state.last_feedback_type = "incorrect"
+            st.session_state.flash_type = "incorrect"
             st.session_state.wrong_answer_streak += 1
 
-            # Show 🫠 starting with the SECOND
-            # consecutive wrong answer.
-            #
-            # It will also show on the third, fourth,
-            # fifth, etc. consecutive wrong attempts.
             if st.session_state.wrong_answer_streak >= 2:
-
                 st.session_state.meltdown_popup = True
 
         st.rerun()
@@ -1838,23 +1703,10 @@ for letter in [
 
 if st.session_state.last_feedback:
 
-    if (
-        st.session_state.last_feedback_type
-        == "correct"
-    ):
-
-        st.success(
-            st.session_state.last_feedback
-        )
-
-    elif (
-        st.session_state.last_feedback_type
-        == "incorrect"
-    ):
-
-        st.error(
-            st.session_state.last_feedback
-        )
+    if st.session_state.last_feedback_type == "correct":
+        st.success(st.session_state.last_feedback)
+    elif st.session_state.last_feedback_type == "incorrect":
+        st.error(st.session_state.last_feedback)
 
 
 # ============================================================
@@ -1865,13 +1717,9 @@ if st.session_state.show_explanation:
 
     st.divider()
 
-    st.subheader(
-        "Explanation"
-    )
+    st.subheader("Explanation")
 
-    st.info(
-        question["explanation"]
-    )
+    st.info(question["explanation"])
 
     st.write(
         f"**Correct answer: "
@@ -1881,21 +1729,11 @@ if st.session_state.show_explanation:
 
     st.divider()
 
-    # --------------------------------------------------------
-    # NEXT QUESTION
-    # --------------------------------------------------------
+    is_last_in_queue = current_index == len(questions) - 1
 
-    if current_index == total_questions - 1:
-
-        next_button_text = (
-            "Finish Quiz"
-        )
-
-    else:
-
-        next_button_text = (
-            "Next Question →"
-        )
+    next_button_text = (
+        "Finish Quiz" if is_last_in_queue else "Next Question →"
+    )
 
     if st.button(
         next_button_text,
@@ -1903,28 +1741,17 @@ if st.session_state.show_explanation:
         use_container_width=True
     ):
 
-        if current_index == total_questions - 1:
-
+        if is_last_in_queue:
             st.session_state.quiz_complete = True
-
         else:
-
             st.session_state.current_index += 1
 
         st.session_state.current_correct = False
-
         st.session_state.last_feedback = ""
-
         st.session_state.last_feedback_type = ""
-
         st.session_state.show_explanation = False
-
         st.session_state.flash_type = None
-
-        # Reset consecutive wrong-answer tracking
-        # when moving to a new question.
         st.session_state.wrong_answer_streak = 0
-
         st.session_state.meltdown_popup = False
 
         st.rerun()
