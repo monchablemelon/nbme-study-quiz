@@ -501,6 +501,116 @@ def slugify(name):
 
 
 # ============================================================
+# "HARDEST QUESTIONS" — A VIRTUAL, CROSS-BANK PRACTICE DECK
+# ============================================================
+
+HARDEST_BANK_ID = "hardest_questions"
+HARDEST_BANK_LABEL = "🔥 Hardest Questions"
+HARDEST_QUESTION_COUNT = 20
+
+# A question needs at least this many recorded attempts
+# (across everyone) before its accuracy is trusted enough to
+# count toward the hardest-questions ranking. Otherwise a
+# single unlucky guess could make a question look "hardest".
+HARDEST_MIN_ATTEMPTS = 3
+
+
+@st.cache_data(ttl=30)
+def compute_global_question_stats():
+    """
+    Aggregate every recorded answer, across every bank, into
+    per-question (bank_id, question_number) attempt/correct
+    counts. Cached briefly and shared across everyone's
+    session, since this reflects global data, not anything
+    participant-specific.
+    """
+
+    response = (
+        supabase
+        .table("answer_logs")
+        .select("bank_id, question_number, is_correct")
+        .execute()
+    )
+
+    rows = response.data or []
+
+    stats = {}
+
+    for row in rows:
+
+        bank_id = row.get("bank_id")
+        question_number = row.get("question_number")
+
+        if bank_id is None or question_number is None:
+            continue
+
+        key = (bank_id, question_number)
+
+        entry = stats.setdefault(key, {"attempts": 0, "correct": 0})
+
+        entry["attempts"] += 1
+
+        if row.get("is_correct"):
+            entry["correct"] += 1
+
+    return stats
+
+
+def build_hardest_questions_bank():
+    """
+    Build a virtual, read-only deck made up of the questions —
+    pooled across every real bank — with the lowest global
+    accuracy, so participants can specifically drill their
+    weakest spots. Each question is tagged with the real bank
+    it actually came from, so answering/flagging/removing it
+    here still routes back to that bank's real data.
+    """
+
+    try:
+        global_stats = compute_global_question_stats()
+    except Exception:
+        global_stats = {}
+
+    candidates = []
+
+    for bank in VALID_BANKS:
+
+        bank_id = bank["bank_id"]
+
+        for question in bank["questions"]:
+
+            entry = global_stats.get((bank_id, question["number"]))
+
+            if not entry or entry["attempts"] < HARDEST_MIN_ATTEMPTS:
+                continue
+
+            accuracy = entry["correct"] / entry["attempts"]
+
+            candidates.append(
+                (accuracy, entry["attempts"], bank_id, question)
+            )
+
+    # Lowest accuracy first; ties broken by more attempts
+    # (more attempts = more confidence it's genuinely hard).
+    candidates.sort(key=lambda item: (item[0], -item[1]))
+
+    chosen = candidates[:HARDEST_QUESTION_COUNT]
+
+    hardest_questions = []
+
+    for accuracy, attempts, source_bank_id, question in chosen:
+
+        tagged_question = dict(question)
+        tagged_question["source_bank_id"] = source_bank_id
+        tagged_question["source_accuracy"] = accuracy
+        tagged_question["source_attempts"] = attempts
+
+        hardest_questions.append(tagged_question)
+
+    return hardest_questions
+
+
+# ============================================================
 # LOAD EVERY QUESTION BANK FOUND NEXT TO THE APP
 # ============================================================
 
@@ -764,9 +874,39 @@ def start_queue_in_session(participant_id, bank_id):
     )
 
     st.session_state.selected_bank = bank_id
+    st.session_state.selected_bank_total = len(BANKS_BY_ID[bank_id]["questions"])
     st.session_state.cycle = cycle
     st.session_state.base_completed = len(completed_numbers)
     st.session_state.questions = remaining
+    st.session_state.current_index = 0
+    st.session_state.current_correct = False
+    st.session_state.quiz_complete = False
+    st.session_state.last_feedback = ""
+    st.session_state.last_feedback_type = ""
+    st.session_state.show_explanation = False
+    st.session_state.flash_type = None
+    st.session_state.wrong_answer_streak = 0
+    st.session_state.meltdown_popup = False
+
+
+def start_hardest_queue_in_session(participant_id):
+    """
+    Load the current top-N hardest questions (pooled across
+    every bank) as a one-off, freshly-shuffled practice deck.
+    This deck isn't tracked with its own persistent cycle —
+    it's simply recomputed from live global stats every time
+    it's opened, so the mix of questions can change over time.
+    """
+
+    hardest_questions = build_hardest_questions_bank()
+
+    random.shuffle(hardest_questions)
+
+    st.session_state.selected_bank = HARDEST_BANK_ID
+    st.session_state.selected_bank_total = len(hardest_questions)
+    st.session_state.cycle = 1
+    st.session_state.base_completed = 0
+    st.session_state.questions = hardest_questions
     st.session_state.current_index = 0
     st.session_state.current_correct = False
     st.session_state.quiz_complete = False
@@ -1131,6 +1271,7 @@ def initialize_quiz_state():
         "participant_id": None,
         "display_name": "",
         "selected_bank": None,
+        "selected_bank_total": 0,
         "questions": [],
         "current_index": 0,
         "current_correct": False,
@@ -1284,6 +1425,65 @@ with st.sidebar:
 
         st.divider()
 
+        st.write("**Practice**")
+
+        hardest_preview = build_hardest_questions_bank()
+        hardest_total_preview = len(hardest_preview)
+
+        is_hardest_selected = (
+            st.session_state.selected_bank == HARDEST_BANK_ID
+        )
+
+        hardest_label = (
+            f"{'▶ ' if is_hardest_selected else ''}{HARDEST_BANK_LABEL}"
+        )
+
+        if st.button(
+            hardest_label,
+            key="select_hardest_bank",
+            use_container_width=True,
+            disabled=(is_hardest_selected or hardest_total_preview == 0),
+        ):
+
+            try:
+                start_hardest_queue_in_session(
+                    st.session_state.participant_id
+                )
+                st.rerun()
+
+            except Exception as error:
+                st.error("Could not build the hardest-questions deck.")
+                st.exception(error)
+
+        if hardest_total_preview == 0:
+
+            st.caption(
+                "Not enough answered questions yet to rank "
+                "difficulty."
+            )
+
+        else:
+
+            if is_hardest_selected:
+                hardest_done = min(
+                    st.session_state.base_completed
+                    + st.session_state.current_index,
+                    hardest_total_preview
+                )
+            else:
+                hardest_done = 0
+
+            st.progress(
+                min(hardest_done / hardest_total_preview, 1.0)
+            )
+
+            st.caption(
+                f"{hardest_done} / {hardest_total_preview} this "
+                "session · lowest global accuracy"
+            )
+
+        st.divider()
+
         st.write("**Question Banks**")
 
         for bank in ALL_BANKS:
@@ -1337,7 +1537,15 @@ with st.sidebar:
 
         st.divider()
 
-        if st.button(
+        if st.session_state.selected_bank == HARDEST_BANK_ID:
+
+            st.caption(
+                "The hardest-questions deck always reflects "
+                "live data, so there's no cycle to reset here — "
+                "just reopen it above for a fresh set."
+            )
+
+        elif st.button(
             "Reset Progress for This Bank",
             use_container_width=True,
             help=(
@@ -1606,15 +1814,20 @@ st.markdown("</details>", unsafe_allow_html=True)
 # ============================================================
 
 selected_bank_id = st.session_state.selected_bank
-current_bank = BANKS_BY_ID[selected_bank_id]
+is_hardest_mode = selected_bank_id == HARDEST_BANK_ID
+
+if is_hardest_mode:
+    current_bank_display_name = HARDEST_BANK_LABEL
+else:
+    current_bank_display_name = BANKS_BY_ID[selected_bank_id]["display_name"]
 
 questions = st.session_state.questions
 
 current_index = st.session_state.current_index
 
-total_questions_all = len(current_bank["questions"])
+total_questions_all = st.session_state.selected_bank_total
 
-st.caption(f"**Current bank:** {current_bank['display_name']}")
+st.caption(f"**Current bank:** {current_bank_display_name}")
 
 if total_questions_all == 0:
     st.warning("There are no questions left in this question bank.")
@@ -1629,11 +1842,18 @@ if st.session_state.quiz_complete:
 
     st.success("🎉 Quiz complete!")
 
-    st.write(
-        f"You've completed cycle **{st.session_state.cycle}** of "
-        f"**{current_bank['display_name']}** — all "
-        f"**{total_questions_all}** questions."
-    )
+    if is_hardest_mode:
+        st.write(
+            f"You've gone through all **{total_questions_all}** "
+            "of the current hardest questions. Nice work drilling "
+            "your weak spots!"
+        )
+    else:
+        st.write(
+            f"You've completed cycle **{st.session_state.cycle}** of "
+            f"**{current_bank_display_name}** — all "
+            f"**{total_questions_all}** questions."
+        )
 
     st.divider()
 
@@ -1642,16 +1862,27 @@ if st.session_state.quiz_complete:
         "individual question while you are answering it."
     )
 
+    restart_label = (
+        "Pull a fresh hardest-questions deck"
+        if is_hardest_mode
+        else "Start another randomized quiz"
+    )
+
     if st.button(
-        "Start another randomized quiz",
+        restart_label,
         type="primary",
         use_container_width=True
     ):
 
-        start_queue_in_session(
-            st.session_state.participant_id,
-            selected_bank_id
-        )
+        if is_hardest_mode:
+            start_hardest_queue_in_session(
+                st.session_state.participant_id
+            )
+        else:
+            start_queue_in_session(
+                st.session_state.participant_id,
+                selected_bank_id
+            )
 
         st.rerun()
 
@@ -1671,6 +1902,13 @@ if current_index >= len(questions):
 question = questions[current_index]
 question_number = question["number"]
 
+# When drilling the virtual "Hardest Questions" deck, every
+# real action (saving an answer, flagging, removing) needs to
+# route back to the bank the question actually came from —
+# not to the virtual "hardest_questions" id, which has no real
+# document or progress row behind it.
+effective_bank_id = question.get("source_bank_id", selected_bank_id)
+
 
 # ============================================================
 # PROGRESS (consistent with overall cycle progress, not
@@ -1688,10 +1926,25 @@ st.progress(min(progress, 1.0))
 
 st.write(f"### Question {overall_position} of {total_questions_all}")
 
-st.caption(
-    f"Cycle {st.session_state.cycle} · "
-    f"Document question number: {question_number}"
-)
+if is_hardest_mode:
+
+    source_bank_label = BANKS_BY_ID.get(
+        effective_bank_id, {}
+    ).get("display_name", effective_bank_id)
+
+    st.caption(
+        f"From **{source_bank_label}** · "
+        f"Document question number: {question_number} · "
+        f"Global accuracy: {question.get('source_accuracy', 0) * 100:.0f}% "
+        f"({question.get('source_attempts', 0)} attempts)"
+    )
+
+else:
+
+    st.caption(
+        f"Cycle {st.session_state.cycle} · "
+        f"Document question number: {question_number}"
+    )
 
 
 # ============================================================
@@ -1702,7 +1955,7 @@ try:
 
     historical_stats = get_question_stats(
         st.session_state.participant_id,
-        selected_bank_id,
+        effective_bank_id,
         question_number
     )
 
@@ -1780,7 +2033,7 @@ flag_col, trash_col = st.columns([3, 1])
 with flag_col:
 
     already_flagged = (
-        (selected_bank_id, question_number)
+        (effective_bank_id, question_number)
         in st.session_state.flagged_this_session
     )
 
@@ -1792,7 +2045,7 @@ with flag_col:
 
         if st.button(
             "🚩 Report question as irrelevant",
-            key=f"flag_{selected_bank_id}_{question_number}"
+            key=f"flag_{effective_bank_id}_{question_number}"
         ):
 
             try:
@@ -1800,12 +2053,12 @@ with flag_col:
                 save_flag(
                     st.session_state.participant_id,
                     st.session_state.display_name,
-                    selected_bank_id,
+                    effective_bank_id,
                     question_number
                 )
 
                 st.session_state.flagged_this_session.add(
-                    (selected_bank_id, question_number)
+                    (effective_bank_id, question_number)
                 )
 
                 st.rerun()
@@ -1821,13 +2074,13 @@ with trash_col:
 
         if st.button(
             "🗑️ Remove question",
-            key=f"trash_{selected_bank_id}_{question_number}"
+            key=f"trash_{effective_bank_id}_{question_number}"
         ):
 
             try:
 
                 remove_question_everywhere(
-                    selected_bank_id,
+                    effective_bank_id,
                     question_number
                 )
 
@@ -1884,13 +2137,25 @@ for letter in ["A", "B", "C", "D", "E"]:
 
         try:
 
+            if is_hardest_mode:
+                # The hardest-questions deck has no cycle of
+                # its own — save against whatever cycle the
+                # participant is actually on in the real bank
+                # this question came from.
+                effective_cycle = get_participant_cycle(
+                    st.session_state.participant_id,
+                    effective_bank_id
+                )
+            else:
+                effective_cycle = st.session_state.cycle
+
             is_correct = save_answer(
                 st.session_state.participant_id,
                 st.session_state.display_name,
-                selected_bank_id,
+                effective_bank_id,
                 question,
                 letter,
-                st.session_state.cycle
+                effective_cycle
             )
 
         except Exception as error:
