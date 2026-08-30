@@ -1951,6 +1951,33 @@ else:
 # HISTORICAL QUESTION STATISTICS
 # ============================================================
 
+try:
+
+    historical_stats = get_question_stats(
+        st.session_state.participant_id,
+        effective_bank_id,
+        question_number
+    )
+
+except Exception:
+
+    historical_stats = {
+        "attempts": 0,
+        "correct": 0,
+        "accuracy": 0,
+        "answers": {"A": 0, "B": 0, "C": 0, "D": 0, "E": 0},
+        "global_attempts": 0,
+        "global_correct": 0,
+        "global_accuracy": 0,
+    }
+
+historical_attempts = historical_stats["attempts"]
+historical_accuracy = historical_stats["accuracy"]
+
+global_attempts = historical_stats["global_attempts"]
+global_accuracy = historical_stats["global_accuracy"]
+
+
 if st.session_state.last_feedback:
 
     if historical_attempts > 0:
@@ -1997,7 +2024,6 @@ if st.session_state.last_feedback:
                 "Your previous attempts: none | "
                 "Global historical accuracy: no attempts yet"
             )
-
 
 # ============================================================
 # REPORT / REMOVE ROW
