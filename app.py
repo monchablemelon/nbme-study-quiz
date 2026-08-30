@@ -1951,77 +1951,52 @@ else:
 # HISTORICAL QUESTION STATISTICS
 # ============================================================
 
-try:
+if st.session_state.last_feedback:
 
-    historical_stats = get_question_stats(
-        st.session_state.participant_id,
-        effective_bank_id,
-        question_number
-    )
+    if historical_attempts > 0:
 
-except Exception:
+        distribution_parts = []
 
-    historical_stats = {
-        "attempts": 0,
-        "correct": 0,
-        "accuracy": 0,
-        "answers": {"A": 0, "B": 0, "C": 0, "D": 0, "E": 0},
-        "global_attempts": 0,
-        "global_correct": 0,
-        "global_accuracy": 0,
-    }
+        for letter in ["A", "B", "C", "D", "E"]:
 
-historical_attempts = historical_stats["attempts"]
-historical_accuracy = historical_stats["accuracy"]
+            count = historical_stats["answers"].get(letter, 0)
 
-global_attempts = historical_stats["global_attempts"]
-global_accuracy = historical_stats["global_accuracy"]
+            percentage = count / historical_attempts * 100
 
+            distribution_parts.append(f"{letter}: {percentage:.0f}%")
 
-if historical_attempts > 0:
+        if global_attempts > 0:
 
-    distribution_parts = []
+            st.caption(
+                f"Your previous attempts: **{historical_attempts}** | "
+                f"Your historical accuracy: **{historical_accuracy:.0f}%** | "
+                f"Global historical accuracy: **{global_accuracy:.0f}%** | "
+                f"Previously selected: {' '.join(distribution_parts)}"
+            )
 
-    for letter in ["A", "B", "C", "D", "E"]:
+        else:
 
-        count = historical_stats["answers"].get(letter, 0)
-
-        percentage = count / historical_attempts * 100
-
-        distribution_parts.append(f"{letter}: {percentage:.0f}%")
-
-    if global_attempts > 0:
-
-        st.caption(
-            f"Your previous attempts: **{historical_attempts}** | "
-            f"Your historical accuracy: **{historical_accuracy:.0f}%** | "
-            f"Global historical accuracy: **{global_accuracy:.0f}%** | "
-            f"Previously selected: {' '.join(distribution_parts)}"
-        )
+            st.caption(
+                f"Your previous attempts: **{historical_attempts}** | "
+                f"Your historical accuracy: **{historical_accuracy:.0f}%** | "
+                f"Global historical accuracy: No previous attempts"
+            )
 
     else:
 
-        st.caption(
-            f"Your previous attempts: **{historical_attempts}** | "
-            f"Your historical accuracy: **{historical_accuracy:.0f}%** | "
-            f"Global historical accuracy: No previous attempts"
-        )
+        if global_attempts > 0:
 
-else:
+            st.caption(
+                "Your previous attempts: **none** | "
+                f"Global historical accuracy: **{global_accuracy:.0f}%**"
+            )
 
-    if global_attempts > 0:
+        else:
 
-        st.caption(
-            "Your previous attempts: **none** | "
-            f"Global historical accuracy: **{global_accuracy:.0f}%**"
-        )
-
-    else:
-
-        st.caption(
-            "Your previous attempts: none | "
-            "Global historical accuracy: no attempts yet"
-        )
+            st.caption(
+                "Your previous attempts: none | "
+                "Global historical accuracy: no attempts yet"
+            )
 
 
 # ============================================================
