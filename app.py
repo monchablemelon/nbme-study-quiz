@@ -124,10 +124,14 @@ if st.query_params.get("page") == "privacy":
 # STREAMLIT CONFIGURATION
 # ============================================================
 
+# initial_sidebar_state="expanded" makes sure the question-bank
+# panel is open by default instead of being auto-collapsed.
+
 st.set_page_config(
     page_title="NBME Study Quiz",
     page_icon="🧬",
     layout="wide",
+    initial_sidebar_state="expanded",
 )
 
 
@@ -1522,172 +1526,6 @@ if not VALID_BANKS:
 
 
 # ============================================================
-# SIDEBAR
-# ============================================================
-
-with st.sidebar:
-
-    st.title("🧠 NBME Study Quiz")
-
-    if st.session_state.quiz_started:
-
-        st.write(f"**Signed in as:** {st.session_state.display_name}")
-
-        if st.button(
-            "Log out of Google",
-            use_container_width=True,
-        ):
-            st.logout()
-
-        st.divider()
-
-        st.write("**Practice**")
-
-        hardest_preview = build_hardest_questions_bank()
-        hardest_total_preview = len(hardest_preview)
-
-        is_hardest_selected = (
-            st.session_state.selected_bank == HARDEST_BANK_ID
-        )
-
-        hardest_label = (
-            f"{'▶ ' if is_hardest_selected else ''}{HARDEST_BANK_LABEL}"
-        )
-
-        if st.button(
-            hardest_label,
-            key="select_hardest_bank",
-            use_container_width=True,
-            disabled=(is_hardest_selected or hardest_total_preview == 0),
-        ):
-
-            try:
-                start_hardest_queue_in_session(
-                    st.session_state.participant_id
-                )
-                st.rerun()
-
-            except Exception as error:
-                st.error("Could not build the hardest-questions deck.")
-                st.exception(error)
-
-        if hardest_total_preview == 0:
-
-            st.caption(
-                "Not enough answered questions yet to rank "
-                "difficulty."
-            )
-
-        else:
-
-            if is_hardest_selected:
-                hardest_done = min(
-                    st.session_state.base_completed
-                    + st.session_state.current_index,
-                    hardest_total_preview
-                )
-            else:
-                hardest_done = 0
-
-            st.progress(
-                min(hardest_done / hardest_total_preview, 1.0)
-            )
-
-            st.caption(
-                f"{hardest_done} / {hardest_total_preview} this "
-                "session · lowest global accuracy"
-            )
-
-        st.divider()
-
-        st.write("**Question Banks**")
-
-        for bank in ALL_BANKS:
-
-            bank_id = bank["bank_id"]
-
-            if bank["error"]:
-                st.caption(f"⚠️ {bank['display_name']} — failed to load")
-                continue
-
-            is_selected = st.session_state.selected_bank == bank_id
-
-            label = f"{'▶ ' if is_selected else ''}{bank['display_name']}"
-
-            if st.button(
-                label,
-                key=f"select_bank_{bank_id}",
-                use_container_width=True,
-                disabled=is_selected,
-            ):
-
-                try:
-                    start_queue_in_session(
-                        st.session_state.participant_id,
-                        bank_id
-                    )
-                    st.rerun()
-
-                except Exception as error:
-                    st.error(
-                        f"Could not load progress for "
-                        f"{bank['display_name']}."
-                    )
-                    st.exception(error)
-
-            try:
-                cycle, done, total = get_bank_progress_summary(
-                    st.session_state.participant_id,
-                    bank_id
-                )
-            except Exception:
-                cycle, done, total = 1, 0, len(bank["questions"])
-
-            fraction = (done / total) if total else 0.0
-
-            st.progress(min(fraction, 1.0))
-
-            cycle_note = f" · cycle {cycle}" if cycle > 1 else ""
-
-            st.caption(f"{done} / {total} completed{cycle_note}")
-
-        st.divider()
-
-        if st.session_state.selected_bank == HARDEST_BANK_ID:
-
-            st.caption(
-                "The hardest-questions deck always reflects "
-                "live data, so there's no cycle to reset here — "
-                "just reopen it above for a fresh set."
-            )
-
-        elif st.button(
-            "Reset Progress for This Bank",
-            use_container_width=True,
-            help=(
-                "Abandon the current cycle for the selected "
-                "bank and start a brand-new randomized pass "
-                "through it."
-            )
-        ):
-
-            reset_participant_progress(
-                st.session_state.participant_id,
-                st.session_state.selected_bank
-            )
-
-            start_queue_in_session(
-                st.session_state.participant_id,
-                st.session_state.selected_bank
-            )
-
-            st.rerun()
-
-    else:
-        st.caption(f"{len(VALID_BANKS)} question bank(s) available.")
-
-
-# ============================================================
 # TITLE
 # ============================================================
 
@@ -1711,6 +1549,10 @@ st.caption(
 # progress/answer-tracking system.
 
 if not st.user.is_logged_in:
+
+    with st.sidebar:
+        st.title("🧠 NBME Study Quiz")
+        st.caption(f"{len(VALID_BANKS)} question bank(s) available.")
 
     st.subheader("Sign in to start")
 
@@ -1773,6 +1615,172 @@ if (
         st.error("Could not load your progress from the database.")
         st.exception(error)
         st.stop()
+
+
+# ============================================================
+# SIDEBAR
+# ============================================================
+# NOTE: The sidebar is built AFTER login and session
+# initialization. Previously it was drawn before them, so on the
+# first run after signing in it saw quiz_started == False and
+# rendered only the short "bank(s) available" caption, leaving the
+# question-bank selection panel missing.
+
+with st.sidebar:
+
+    st.title("🧠 NBME Study Quiz")
+
+    st.write(f"**Signed in as:** {st.session_state.display_name}")
+
+    if st.button(
+        "Log out of Google",
+        use_container_width=True,
+    ):
+        st.logout()
+
+    st.divider()
+
+    st.write("**Practice**")
+
+    hardest_preview = build_hardest_questions_bank()
+    hardest_total_preview = len(hardest_preview)
+
+    is_hardest_selected = (
+        st.session_state.selected_bank == HARDEST_BANK_ID
+    )
+
+    hardest_label = (
+        f"{'▶ ' if is_hardest_selected else ''}{HARDEST_BANK_LABEL}"
+    )
+
+    if st.button(
+        hardest_label,
+        key="select_hardest_bank",
+        use_container_width=True,
+        disabled=(is_hardest_selected or hardest_total_preview == 0),
+    ):
+
+        try:
+            start_hardest_queue_in_session(
+                st.session_state.participant_id
+            )
+            st.rerun()
+
+        except Exception as error:
+            st.error("Could not build the hardest-questions deck.")
+            st.exception(error)
+
+    if hardest_total_preview == 0:
+
+        st.caption(
+            "Not enough answered questions yet to rank "
+            "difficulty."
+        )
+
+    else:
+
+        if is_hardest_selected:
+            hardest_done = min(
+                st.session_state.base_completed
+                + st.session_state.current_index,
+                hardest_total_preview
+            )
+        else:
+            hardest_done = 0
+
+        st.progress(
+            min(hardest_done / hardest_total_preview, 1.0)
+        )
+
+        st.caption(
+            f"{hardest_done} / {hardest_total_preview} this "
+            "session · lowest global accuracy"
+        )
+
+    st.divider()
+
+    st.write("**Question Banks**")
+
+    for bank in ALL_BANKS:
+
+        bank_id = bank["bank_id"]
+
+        if bank["error"]:
+            st.caption(f"⚠️ {bank['display_name']} — failed to load")
+            continue
+
+        is_selected = st.session_state.selected_bank == bank_id
+
+        label = f"{'▶ ' if is_selected else ''}{bank['display_name']}"
+
+        if st.button(
+            label,
+            key=f"select_bank_{bank_id}",
+            use_container_width=True,
+            disabled=is_selected,
+        ):
+
+            try:
+                start_queue_in_session(
+                    st.session_state.participant_id,
+                    bank_id
+                )
+                st.rerun()
+
+            except Exception as error:
+                st.error(
+                    f"Could not load progress for "
+                    f"{bank['display_name']}."
+                )
+                st.exception(error)
+
+        try:
+            cycle, done, total = get_bank_progress_summary(
+                st.session_state.participant_id,
+                bank_id
+            )
+        except Exception:
+            cycle, done, total = 1, 0, len(bank["questions"])
+
+        fraction = (done / total) if total else 0.0
+
+        st.progress(min(fraction, 1.0))
+
+        cycle_note = f" · cycle {cycle}" if cycle > 1 else ""
+
+        st.caption(f"{done} / {total} completed{cycle_note}")
+
+    st.divider()
+
+    if st.session_state.selected_bank == HARDEST_BANK_ID:
+
+        st.caption(
+            "The hardest-questions deck always reflects "
+            "live data, so there's no cycle to reset here — "
+            "just reopen it above for a fresh set."
+        )
+
+    elif st.button(
+        "Reset Progress for This Bank",
+        use_container_width=True,
+        help=(
+            "Abandon the current cycle for the selected "
+            "bank and start a brand-new randomized pass "
+            "through it."
+        )
+    ):
+
+        reset_participant_progress(
+            st.session_state.participant_id,
+            st.session_state.selected_bank
+        )
+
+        start_queue_in_session(
+            st.session_state.participant_id,
+            st.session_state.selected_bank
+        )
+
+        st.rerun()
 
 
 # ============================================================
