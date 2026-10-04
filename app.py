@@ -1421,7 +1421,13 @@ with st.sidebar:
 
     if st.session_state.quiz_started:
 
-        st.write(f"**Participant:** {st.session_state.display_name}")
+        st.write(f"**Signed in as:** {st.session_state.display_name}")
+
+        if st.button(
+            "Log out of Google",
+            use_container_width=True,
+        ):
+            st.logout()
 
         st.divider()
 
@@ -1586,76 +1592,77 @@ st.caption(
 
 
 # ============================================================
-# LOGIN / START PAGE
+# GOOGLE LOGIN / START PAGE
 # ============================================================
 
-if not st.session_state.quiz_started:
+# Streamlit handles the Google OIDC login and stores the authenticated
+# identity in st.user. We use Google's stable "sub" identifier to
+# generate the participant_id used throughout the existing Supabase
+# progress/answer-tracking system.
 
-    st.subheader("Log in to start")
+if not st.user.is_logged_in:
 
-    username = st.text_input(
-        "Username",
-        placeholder="Enter your username"
+    st.subheader("Sign in to start")
+
+    st.write(
+        "Sign in with any Google account. Your quiz progress will be "
+        "saved to your account."
     )
 
-    password = st.text_input(
-        "Password",
-        type="password",
-        placeholder="Enter your password"
-    )
-
-    if st.button(
-        "Log In & Start Quiz",
+    st.button(
+        "Sign in with Google",
         type="primary",
-        use_container_width=True
-    ):
-
-        username = username.strip()
-
-        users = st.secrets["users"]
-
-        if username not in users:
-            st.error("Invalid username or password.")
-            st.stop()
-
-        expected_password = users[username]
-
-        if password != expected_password:
-            st.error("Invalid username or password.")
-            st.stop()
-
-        participant_id = create_participant_id(
-            username,
-            st.secrets["PARTICIPANT_SALT"]
-        )
-
-        try:
-            save_participant(participant_id, username)
-        except Exception as error:
-            st.error("Could not connect to the database.")
-            st.exception(error)
-            st.stop()
-
-        st.session_state.quiz_started = True
-        st.session_state.participant_id = participant_id
-        st.session_state.display_name = username
-
-        default_bank_id = VALID_BANKS[0]["bank_id"]
-
-        try:
-            start_queue_in_session(participant_id, default_bank_id)
-        except Exception as error:
-            st.error("Could not load your progress from the database.")
-            st.exception(error)
-            st.stop()
-
-        st.rerun()
+        use_container_width=True,
+        on_click=st.login,
+    )
 
     st.divider()
-
-    st.write("Please use the username and password provided to you.")
+    st.caption("You can use any Google account to access the quiz.")
 
     st.stop()
+
+
+# The user is authenticated by this point. Google provides a stable
+# subject identifier (sub), plus display information such as name/email.
+google_sub = st.user.get("sub")
+google_email = st.user.get("email", "")
+google_name = st.user.get("name") or google_email or "Google user"
+
+if not google_sub:
+    st.error("Google sign-in succeeded, but no Google user ID was provided.")
+    st.stop()
+
+participant_id = create_participant_id(
+    google_sub,
+    st.secrets["PARTICIPANT_SALT"]
+)
+
+# Initialize this Google user's persistent participant record once per
+# Streamlit session, then start their first/default question bank.
+if (
+    not st.session_state.quiz_started
+    or st.session_state.participant_id != participant_id
+):
+
+    try:
+        save_participant(participant_id, google_name)
+    except Exception as error:
+        st.error("Could not connect to the database.")
+        st.exception(error)
+        st.stop()
+
+    st.session_state.quiz_started = True
+    st.session_state.participant_id = participant_id
+    st.session_state.display_name = google_name
+
+    default_bank_id = VALID_BANKS[0]["bank_id"]
+
+    try:
+        start_queue_in_session(participant_id, default_bank_id)
+    except Exception as error:
+        st.error("Could not load your progress from the database.")
+        st.exception(error)
+        st.stop()
 
 
 # ============================================================
