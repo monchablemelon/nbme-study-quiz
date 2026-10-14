@@ -1,13 +1,16 @@
 import hashlib
 import random
 import re
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 from docx import Document
 from supabase import create_client
+
 
 # ============================================================
 # PUBLIC PRIVACY POLICY
@@ -120,18 +123,468 @@ if st.query_params.get("page") == "privacy":
     st.caption("Last updated: October 3, 2026")
 
     st.stop()
+
+
 # ============================================================
 # STREAMLIT CONFIGURATION
 # ============================================================
-
-# initial_sidebar_state="expanded" makes sure the question-bank
-# panel is open by default instead of being auto-collapsed.
 
 st.set_page_config(
     page_title="NBME Study Quiz",
     page_icon="🧬",
     layout="wide",
     initial_sidebar_state="expanded",
+)
+
+
+# ============================================================
+# RIGHT-CLICK ANSWER CHOICE COMPONENT
+# ============================================================
+# The component below lets the user interact with answer
+# choices using both left-click and right-click.
+#
+# Left-click sends the selected letter back to Python.
+# Right-click toggles the visual crossed-out state.
+#
+# The component is generated in the system temporary directory,
+# so no extra HTML or JavaScript files need to be committed
+# to the GitHub repository.
+# ============================================================
+
+ANSWER_COMPONENT_HTML = r"""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<style>
+    * {
+        box-sizing: border-box;
+    }
+
+    html, body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        background: transparent;
+        font-family: var(--component-font, sans-serif);
+    }
+
+    #choices-root {
+        width: 100%;
+        display: flex;
+        flex-direction: column;
+        gap: 0.45rem;
+        padding: 2px 0 4px 0;
+    }
+
+    .answer-choice {
+        width: 100%;
+        min-height: 3rem;
+        display: flex;
+        align-items: center;
+        gap: 0.65rem;
+
+        padding: 0.65rem 0.85rem;
+
+        border: 1px solid rgba(128, 128, 128, 0.45);
+        border-radius: 0.55rem;
+
+        background: var(--component-background, transparent);
+        color: var(--component-text, #31333f);
+
+        font-family: var(--component-font, sans-serif);
+        font-size: 1rem;
+        line-height: 1.45;
+        text-align: left;
+
+        white-space: normal;
+        overflow-wrap: anywhere;
+        word-break: normal;
+
+        cursor: pointer;
+        transition:
+            background-color 0.12s ease,
+            border-color 0.12s ease,
+            color 0.12s ease,
+            opacity 0.12s ease;
+    }
+
+    .answer-choice:not(:disabled):hover {
+        border-color: var(--component-primary, #ff4b4b);
+    }
+
+    .answer-choice:focus-visible {
+        outline: 2px solid var(--component-primary, #ff4b4b);
+        outline-offset: 2px;
+    }
+
+    .choice-symbol {
+        display: inline-flex;
+        flex: 0 0 1.3rem;
+        width: 1.3rem;
+        justify-content: center;
+        align-items: center;
+
+        font-size: 1.05rem;
+        line-height: 1;
+
+        visibility: hidden;
+        opacity: 0;
+    }
+
+    .choice-letter {
+        flex: 0 0 auto;
+        font-weight: 700;
+    }
+
+    .choice-text {
+        flex: 1 1 auto;
+        min-width: 0;
+    }
+
+    /* Right-clicked choices are visibly eliminated. */
+    .answer-choice.crossed-out {
+        background: #ededed !important;
+        border-color: #b9b9b9 !important;
+        color: #858585 !important;
+    }
+
+    .answer-choice.crossed-out .choice-symbol {
+        visibility: visible;
+        opacity: 1;
+    }
+
+    .answer-choice.crossed-out .choice-letter,
+    .answer-choice.crossed-out .choice-text {
+        color: #858585 !important;
+        text-decoration: line-through;
+        text-decoration-thickness: 1.5px;
+    }
+
+    /* Keep the correct answer green once the question is solved. */
+    .answer-choice.correct-answer {
+        background: #dcfce7 !important;
+        border-color: #22a447 !important;
+        color: #166534 !important;
+        cursor: default;
+        opacity: 1;
+    }
+
+    .answer-choice.correct-answer .choice-letter,
+    .answer-choice.correct-answer .choice-text {
+        color: #166534 !important;
+        text-decoration: none !important;
+    }
+
+    .answer-choice:disabled:not(.correct-answer) {
+        cursor: default;
+    }
+
+    /* Don't make a solved choice appear crossed out. */
+    .answer-choice.correct-answer .choice-symbol {
+        visibility: hidden !important;
+        opacity: 0 !important;
+    }
+</style>
+</head>
+
+<body>
+<div id="choices-root"></div>
+
+<script>
+(function () {
+    "use strict";
+
+    const root = document.getElementById("choices-root");
+
+    let currentArgs = {};
+    let currentTheme = {};
+    let eventCounter = 0;
+
+    function sendToStreamlit(value) {
+        window.parent.postMessage(
+            {
+                isStreamlitMessage: true,
+                type: "streamlit:setComponentValue",
+                value: value,
+                dataType: "json"
+            },
+            "*"
+        );
+    }
+
+    function setFrameHeight() {
+        const height = Math.ceil(
+            root.getBoundingClientRect().height + 8
+        );
+
+        window.parent.postMessage(
+            {
+                isStreamlitMessage: true,
+                type: "streamlit:setFrameHeight",
+                height: Math.max(12, height)
+            },
+            "*"
+        );
+    }
+
+    function makeEventId() {
+        eventCounter += 1;
+
+        return (
+            Date.now().toString()
+            + "-"
+            + eventCounter.toString()
+            + "-"
+            + Math.random().toString(36).slice(2)
+        );
+    }
+
+    function sendInteraction(action, letter, crossedLetters) {
+        sendToStreamlit({
+            event_id: makeEventId(),
+            action: action,
+            letter: letter,
+            crossed_letters: Array.from(crossedLetters)
+        });
+    }
+
+    function applyTheme(theme) {
+        currentTheme = theme || {};
+
+        const styles = document.documentElement.style;
+
+        styles.setProperty(
+            "--component-text",
+            currentTheme.textColor || "#31333f"
+        );
+
+        styles.setProperty(
+            "--component-background",
+            currentTheme.backgroundColor || "transparent"
+        );
+
+        styles.setProperty(
+            "--component-primary",
+            currentTheme.primaryColor || "#ff4b4b"
+        );
+
+        styles.setProperty(
+            "--component-font",
+            currentTheme.font || "sans-serif"
+        );
+    }
+
+    function render(args, theme) {
+        currentArgs = args || {};
+
+        applyTheme(theme || {});
+
+        const options = Array.isArray(currentArgs.options)
+            ? currentArgs.options
+            : [];
+
+        const crossedLetters = new Set(
+            Array.isArray(currentArgs.crossed_letters)
+                ? currentArgs.crossed_letters
+                : []
+        );
+
+        const answeredCorrectly = Boolean(
+            currentArgs.current_correct
+        );
+
+        const correctLetter = currentArgs.correct_letter || null;
+
+        root.replaceChildren();
+
+        options.forEach(function (option) {
+            const letter = String(option.letter || "");
+            const text = String(option.text || "");
+
+            const isCorrectAnswer = (
+                answeredCorrectly && letter === correctLetter
+            );
+
+            const isCrossedOut = (
+                crossedLetters.has(letter) && !isCorrectAnswer
+            );
+
+            const button = document.createElement("button");
+
+            button.type = "button";
+            button.className = "answer-choice";
+            button.setAttribute("aria-label", letter + ". " + text);
+
+            if (answeredCorrectly) {
+                button.disabled = true;
+            }
+
+            if (isCorrectAnswer) {
+                button.classList.add("correct-answer");
+            }
+
+            if (isCrossedOut) {
+                button.classList.add("crossed-out");
+            }
+
+            const symbol = document.createElement("span");
+            symbol.className = "choice-symbol";
+            symbol.setAttribute("aria-hidden", "true");
+            symbol.textContent = "🚫";
+
+            const letterElement = document.createElement("span");
+            letterElement.className = "choice-letter";
+            letterElement.textContent = letter + ".";
+
+            const textElement = document.createElement("span");
+            textElement.className = "choice-text";
+            textElement.textContent = text;
+
+            button.appendChild(symbol);
+            button.appendChild(letterElement);
+            button.appendChild(textElement);
+
+            /*
+             * LEFT CLICK:
+             * Submit an answer to Python.
+             * A crossed-out option remains selectable because
+             * crossing it out is purely a visual aid.
+             */
+            button.addEventListener("click", function () {
+                if (answeredCorrectly) {
+                    return;
+                }
+
+                sendInteraction(
+                    "answer",
+                    letter,
+                    crossedLetters
+                );
+            });
+
+            /*
+             * RIGHT CLICK:
+             * Toggle the no symbol and greyed-out styling.
+             * Do not submit an answer.
+             */
+            button.addEventListener("contextmenu", function (event) {
+                event.preventDefault();
+                event.stopPropagation();
+
+                if (answeredCorrectly) {
+                    return;
+                }
+
+                if (crossedLetters.has(letter)) {
+                    crossedLetters.delete(letter);
+                } else {
+                    crossedLetters.add(letter);
+                }
+
+                const nowCrossed = crossedLetters.has(letter);
+
+                button.classList.toggle(
+                    "crossed-out",
+                    nowCrossed
+                );
+
+                sendInteraction(
+                    "toggle_crossout",
+                    letter,
+                    crossedLetters
+                );
+
+                setFrameHeight();
+            });
+
+            root.appendChild(button);
+        });
+
+        requestAnimationFrame(setFrameHeight);
+    }
+
+    /*
+     * Streamlit sends the component arguments through its
+     * normal component render message.
+     */
+    window.addEventListener("message", function (event) {
+        const data = event.data;
+
+        if (
+            !data
+            || data.type !== "streamlit:render"
+        ) {
+            return;
+        }
+
+        render(
+            data.args || {},
+            data.theme || {}
+        );
+    });
+
+    /*
+     * Tell Streamlit that this component is ready.
+     */
+    window.parent.postMessage(
+        {
+            isStreamlitMessage: true,
+            type: "streamlit:componentReady",
+            apiVersion: 1
+        },
+        "*"
+    );
+
+    /*
+     * Keep the component height correct if a long answer
+     * wraps onto additional lines.
+     */
+    if (window.ResizeObserver) {
+        const observer = new ResizeObserver(setFrameHeight);
+        observer.observe(root);
+    }
+
+})();
+</script>
+</body>
+</html>
+"""
+
+
+# Make the component's frontend files in a temporary folder.
+# These are generated automatically; you don't have to upload
+# them separately to GitHub.
+
+ANSWER_COMPONENT_DIRECTORY = (
+    Path(tempfile.gettempdir())
+    / "nbme_study_quiz_answer_choice_component"
+)
+
+ANSWER_COMPONENT_DIRECTORY.mkdir(
+    parents=True,
+    exist_ok=True
+)
+
+ANSWER_COMPONENT_FILE = (
+    ANSWER_COMPONENT_DIRECTORY / "index.html"
+)
+
+if (
+    not ANSWER_COMPONENT_FILE.exists()
+    or ANSWER_COMPONENT_FILE.read_text(encoding="utf-8")
+    != ANSWER_COMPONENT_HTML
+):
+    ANSWER_COMPONENT_FILE.write_text(
+        ANSWER_COMPONENT_HTML,
+        encoding="utf-8"
+    )
+
+answer_choice_component = components.declare_component(
+    "nbme_study_quiz_answer_choices",
+    path=str(ANSWER_COMPONENT_DIRECTORY.resolve())
 )
 
 
@@ -609,7 +1062,11 @@ def load_cached_question_bank(file_path, modified_time):
 
 def slugify(name):
 
-    slug = re.sub(r"[^a-zA-Z0-9]+", "_", name).strip("_").lower()
+    slug = re.sub(
+        r"[^a-zA-Z0-9]+",
+        "_",
+        name
+    ).strip("_").lower()
 
     return slug or "bank"
 
@@ -660,7 +1117,10 @@ def compute_global_question_stats():
 
         key = (bank_id, question_number)
 
-        entry = stats.setdefault(key, {"attempts": 0, "correct": 0})
+        entry = stats.setdefault(
+            key,
+            {"attempts": 0, "correct": 0}
+        )
 
         entry["attempts"] += 1
 
@@ -693,20 +1153,32 @@ def build_hardest_questions_bank():
 
         for question in bank["questions"]:
 
-            entry = global_stats.get((bank_id, question["number"]))
+            entry = global_stats.get(
+                (bank_id, question["number"])
+            )
 
-            if not entry or entry["attempts"] < HARDEST_MIN_ATTEMPTS:
+            if (
+                not entry
+                or entry["attempts"] < HARDEST_MIN_ATTEMPTS
+            ):
                 continue
 
             accuracy = entry["correct"] / entry["attempts"]
 
             candidates.append(
-                (accuracy, entry["attempts"], bank_id, question)
+                (
+                    accuracy,
+                    entry["attempts"],
+                    bank_id,
+                    question
+                )
             )
 
     # Lowest accuracy first; ties broken by more attempts
     # (more attempts = more confidence it's genuinely hard).
-    candidates.sort(key=lambda item: (item[0], -item[1]))
+    candidates.sort(
+        key=lambda item: (item[0], -item[1])
+    )
 
     chosen = candidates[:HARDEST_QUESTION_COUNT]
 
@@ -791,7 +1263,9 @@ def create_participant_id(participant_code, app_salt):
 
     value = str(app_salt) + "|" + participant_code.strip()
 
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+    return hashlib.sha256(
+        value.encode("utf-8")
+    ).hexdigest()
 
 
 # ============================================================
@@ -821,10 +1295,6 @@ def get_participant_cycle(participant_id, bank_id):
     Get the participant's current "lap" through one specific
     question bank. Defaults to 1 for a brand-new participant,
     or for a bank they haven't started yet.
-
-    NOTE: this reads from the "participant_progress" table,
-    which needs a (participant_id, bank_id) unique constraint —
-    see the setup notes for the SQL to create it.
     """
 
     response = (
@@ -867,13 +1337,22 @@ def set_participant_cycle(participant_id, bank_id, cycle):
 # DATABASE FUNCTIONS — ANSWERS
 # ============================================================
 
-def save_answer(participant_id, display_name, bank_id, question, selected_letter, cycle):
+def save_answer(
+    participant_id,
+    display_name,
+    bank_id,
+    question,
+    selected_letter,
+    cycle
+):
     """
     Save one answer attempt permanently in Supabase, tagged
     with which bank and which cycle it belongs to.
     """
 
-    is_correct = selected_letter == question["correct_letter"]
+    is_correct = (
+        selected_letter == question["correct_letter"]
+    )
 
     record = {
         "participant_id": participant_id,
@@ -892,7 +1371,11 @@ def save_answer(participant_id, display_name, bank_id, question, selected_letter
     return is_correct
 
 
-def get_completed_question_numbers(participant_id, bank_id, cycle):
+def get_completed_question_numbers(
+    participant_id,
+    bank_id,
+    cycle
+):
     """
     Question numbers this participant has already answered
     CORRECTLY in this bank during the given cycle. These are
@@ -913,7 +1396,10 @@ def get_completed_question_numbers(participant_id, bank_id, cycle):
 
     rows = response.data or []
 
-    return {row["question_number"] for row in rows}
+    return {
+        row["question_number"]
+        for row in rows
+    }
 
 
 # ============================================================
@@ -934,7 +1420,10 @@ def build_participant_queue(participant_id, bank_id):
 
     bank_questions = BANKS_BY_ID[bank_id]["questions"]
 
-    cycle = get_participant_cycle(participant_id, bank_id)
+    cycle = get_participant_cycle(
+        participant_id,
+        bank_id
+    )
 
     completed_numbers = get_completed_question_numbers(
         participant_id,
@@ -942,7 +1431,10 @@ def build_participant_queue(participant_id, bank_id):
         cycle
     )
 
-    valid_numbers = {question["number"] for question in bank_questions}
+    valid_numbers = {
+        question["number"]
+        for question in bank_questions
+    }
 
     # Only count completions for questions that still exist —
     # an administrator may have removed one since.
@@ -958,7 +1450,11 @@ def build_participant_queue(participant_id, bank_id):
 
         cycle += 1
 
-        set_participant_cycle(participant_id, bank_id, cycle)
+        set_participant_cycle(
+            participant_id,
+            bank_id,
+            cycle
+        )
 
         completed_numbers = set()
 
@@ -975,9 +1471,16 @@ def reset_participant_progress(participant_id, bank_id):
     a fresh one, even if it isn't finished yet.
     """
 
-    current_cycle = get_participant_cycle(participant_id, bank_id)
+    current_cycle = get_participant_cycle(
+        participant_id,
+        bank_id
+    )
 
-    set_participant_cycle(participant_id, bank_id, current_cycle + 1)
+    set_participant_cycle(
+        participant_id,
+        bank_id,
+        current_cycle + 1
+    )
 
 
 def start_queue_in_session(participant_id, bank_id):
@@ -987,8 +1490,16 @@ def start_queue_in_session(participant_id, bank_id):
         bank_id
     )
 
+    # Increment the queue identifier so all right-click marks
+    # reset whenever a new queue is loaded.
+    st.session_state.queue_instance_id = (
+        st.session_state.get("queue_instance_id", 0) + 1
+    )
+
     st.session_state.selected_bank = bank_id
-    st.session_state.selected_bank_total = len(BANKS_BY_ID[bank_id]["questions"])
+    st.session_state.selected_bank_total = len(
+        BANKS_BY_ID[bank_id]["questions"]
+    )
     st.session_state.cycle = cycle
     st.session_state.base_completed = len(completed_numbers)
     st.session_state.questions = remaining
@@ -1015,6 +1526,12 @@ def start_hardest_queue_in_session(participant_id):
     hardest_questions = build_hardest_questions_bank()
 
     random.shuffle(hardest_questions)
+
+    # Starting a fresh hardest-questions deck clears the visual
+    # marks from the previously displayed deck.
+    st.session_state.queue_instance_id = (
+        st.session_state.get("queue_instance_id", 0) + 1
+    )
 
     st.session_state.selected_bank = HARDEST_BANK_ID
     st.session_state.selected_bank_total = len(hardest_questions)
@@ -1044,7 +1561,10 @@ def get_bank_progress_summary(participant_id, bank_id):
     if total == 0:
         return 1, 0, 0
 
-    cycle = get_participant_cycle(participant_id, bank_id)
+    cycle = get_participant_cycle(
+        participant_id,
+        bank_id
+    )
 
     completed_numbers = get_completed_question_numbers(
         participant_id,
@@ -1052,7 +1572,11 @@ def get_bank_progress_summary(participant_id, bank_id):
         cycle
     )
 
-    valid_numbers = {question["number"] for question in bank_questions}
+    valid_numbers = {
+        question["number"]
+        for question in bank_questions
+    }
+
     completed_numbers = completed_numbers & valid_numbers
 
     return cycle, len(completed_numbers), total
@@ -1062,7 +1586,11 @@ def get_bank_progress_summary(participant_id, bank_id):
 # DATABASE FUNCTIONS — STATISTICS
 # ============================================================
 
-def get_question_stats(participant_id, bank_id, question_number):
+def get_question_stats(
+    participant_id,
+    bank_id,
+    question_number
+):
     """
     Get historical statistics for ONE specific question in ONE
     specific bank, both for this user (across all their cycles)
@@ -1084,10 +1612,18 @@ def get_question_stats(participant_id, bank_id, question_number):
     attempts = len(rows)
 
     correct = sum(
-        1 for row in rows if row.get("is_correct") is True
+        1
+        for row in rows
+        if row.get("is_correct") is True
     )
 
-    answer_counts = {"A": 0, "B": 0, "C": 0, "D": 0, "E": 0}
+    answer_counts = {
+        "A": 0,
+        "B": 0,
+        "C": 0,
+        "D": 0,
+        "E": 0
+    }
 
     for row in rows:
 
@@ -1096,7 +1632,11 @@ def get_question_stats(participant_id, bank_id, question_number):
         if letter in answer_counts:
             answer_counts[letter] += 1
 
-    user_accuracy = (correct / attempts * 100) if attempts else 0
+    user_accuracy = (
+        correct / attempts * 100
+        if attempts
+        else 0
+    )
 
     global_response = (
         supabase
@@ -1122,7 +1662,7 @@ def get_question_stats(participant_id, bank_id, question_number):
     global_correct = global_correct_response.count or 0
 
     global_accuracy = (
-        (global_correct / global_attempts * 100)
+        global_correct / global_attempts * 100
         if global_attempts
         else 0
     )
@@ -1155,7 +1695,12 @@ def get_all_answers():
     return response.data or []
 
 
-def save_flag(participant_id, display_name, bank_id, question_number):
+def save_flag(
+    participant_id,
+    display_name,
+    bank_id,
+    question_number
+):
 
     record = {
         "participant_id": participant_id,
@@ -1237,7 +1782,10 @@ def strip_question_from_docx(file_path, question_number):
             answer_sheet_heading_index = index
             break
 
-    if questions_heading_index is None or answer_sheet_heading_index is None:
+    if (
+        questions_heading_index is None
+        or answer_sheet_heading_index is None
+    ):
         raise ValueError(
             "Could not locate the document's Questions / "
             "Answer Sheet sections."
@@ -1304,6 +1852,7 @@ def strip_question_from_docx(file_path, question_number):
     for position, index in enumerate(heading_indices):
 
         text = clean_text(paragraphs[index].text)
+
         match = HEADING_NUMBER_PATTERN.fullmatch(text)
         number = int(match.group(1))
 
@@ -1339,10 +1888,16 @@ def remove_question_everywhere(bank_id, question_number):
 
     bank = BANKS_BY_ID[bank_id]
 
-    strip_question_from_docx(bank["path"], question_number)
+    strip_question_from_docx(
+        bank["path"],
+        question_number
+    )
 
     try:
-        clear_flags_for_question(bank_id, question_number)
+        clear_flags_for_question(
+            bank_id,
+            question_number
+        )
     except Exception:
         # Flag cleanup is best-effort; the document edit is
         # what actually matters.
@@ -1369,7 +1924,10 @@ def drop_question_from_session(question_number):
     st.session_state.last_feedback_type = ""
     st.session_state.flash_type = None
 
-    if st.session_state.current_index >= len(st.session_state.questions):
+    if (
+        st.session_state.current_index
+        >= len(st.session_state.questions)
+    ):
         st.session_state.quiz_complete = True
         st.session_state.current_index = 0
 
@@ -1401,6 +1959,10 @@ def initialize_quiz_state():
         # (scoped to whichever bank is currently selected).
         "cycle": 1,
         "base_completed": 0,
+
+        # Changes whenever a new quiz queue is started.
+        # This also resets the answer-choice visual marks.
+        "queue_instance_id": 0,
 
         # Flagging / admin. Flags are stored as
         # (bank_id, question_number) tuples since question
@@ -1507,8 +2069,17 @@ if st.session_state.get("meltdown_popup"):
 # ============================================================
 
 ALL_BANKS = load_all_banks()
-BANKS_BY_ID = {bank["bank_id"]: bank for bank in ALL_BANKS}
-VALID_BANKS = [bank for bank in ALL_BANKS if not bank["error"]]
+
+BANKS_BY_ID = {
+    bank["bank_id"]: bank
+    for bank in ALL_BANKS
+}
+
+VALID_BANKS = [
+    bank
+    for bank in ALL_BANKS
+    if not bank["error"]
+]
 
 if not ALL_BANKS:
     st.error(
@@ -1519,9 +2090,17 @@ if not ALL_BANKS:
     st.stop()
 
 if not VALID_BANKS:
-    st.error("None of the question bank documents could be loaded.")
+    st.error(
+        "None of the question bank documents could be loaded."
+    )
+
     for bank in ALL_BANKS:
-        st.exception(ValueError(f"{bank['display_name']}: {bank['error']}"))
+        st.exception(
+            ValueError(
+                f"{bank['display_name']}: {bank['error']}"
+            )
+        )
+
     st.stop()
 
 
@@ -1535,7 +2114,8 @@ st.caption(
     "Choose an answer. Incorrect answers can be "
     "retried until the correct answer is selected. "
     "Every question in the bank is asked once per cycle, "
-    "in a random order, before anything repeats."
+    "in a random order, before anything repeats. "
+    "Right-click an answer choice to cross it off."
 )
 
 
@@ -1552,7 +2132,9 @@ if not st.user.is_logged_in:
 
     with st.sidebar:
         st.title("🧠 NBME Study Quiz")
-        st.caption(f"{len(VALID_BANKS)} question bank(s) available.")
+        st.caption(
+            f"{len(VALID_BANKS)} question bank(s) available."
+        )
 
     st.subheader("Sign in to start")
 
@@ -1569,7 +2151,10 @@ if not st.user.is_logged_in:
     )
 
     st.divider()
-    st.caption("You can use any Google account to access the quiz.")
+
+    st.caption(
+        "You can use any Google account to access the quiz."
+    )
 
     st.stop()
 
@@ -1578,10 +2163,16 @@ if not st.user.is_logged_in:
 # subject identifier (sub), plus display information such as name/email.
 google_sub = st.user.get("sub")
 google_email = st.user.get("email", "")
-google_name = st.user.get("name") or google_email or "Google user"
+google_name = (
+    st.user.get("name")
+    or google_email
+    or "Google user"
+)
 
 if not google_sub:
-    st.error("Google sign-in succeeded, but no Google user ID was provided.")
+    st.error(
+        "Google sign-in succeeded, but no Google user ID was provided."
+    )
     st.stop()
 
 participant_id = create_participant_id(
@@ -1597,7 +2188,11 @@ if (
 ):
 
     try:
-        save_participant(participant_id, google_name)
+        save_participant(
+            participant_id,
+            google_name
+        )
+
     except Exception as error:
         st.error("Could not connect to the database.")
         st.exception(error)
@@ -1610,9 +2205,15 @@ if (
     default_bank_id = VALID_BANKS[0]["bank_id"]
 
     try:
-        start_queue_in_session(participant_id, default_bank_id)
+        start_queue_in_session(
+            participant_id,
+            default_bank_id
+        )
+
     except Exception as error:
-        st.error("Could not load your progress from the database.")
+        st.error(
+            "Could not load your progress from the database."
+        )
         st.exception(error)
         st.stop()
 
@@ -1620,17 +2221,15 @@ if (
 # ============================================================
 # SIDEBAR
 # ============================================================
-# NOTE: The sidebar is built AFTER login and session
-# initialization. Previously it was drawn before them, so on the
-# first run after signing in it saw quiz_started == False and
-# rendered only the short "bank(s) available" caption, leaving the
-# question-bank selection panel missing.
+# The sidebar is built AFTER login and session initialization.
 
 with st.sidebar:
 
     st.title("🧠 NBME Study Quiz")
 
-    st.write(f"**Signed in as:** {st.session_state.display_name}")
+    st.write(
+        f"**Signed in as:** {st.session_state.display_name}"
+    )
 
     if st.button(
         "Log out of Google",
@@ -1650,24 +2249,31 @@ with st.sidebar:
     )
 
     hardest_label = (
-        f"{'▶ ' if is_hardest_selected else ''}{HARDEST_BANK_LABEL}"
+        f"{'▶ ' if is_hardest_selected else ''}"
+        f"{HARDEST_BANK_LABEL}"
     )
 
     if st.button(
         hardest_label,
         key="select_hardest_bank",
         use_container_width=True,
-        disabled=(is_hardest_selected or hardest_total_preview == 0),
+        disabled=(
+            is_hardest_selected
+            or hardest_total_preview == 0
+        ),
     ):
 
         try:
             start_hardest_queue_in_session(
                 st.session_state.participant_id
             )
+
             st.rerun()
 
         except Exception as error:
-            st.error("Could not build the hardest-questions deck.")
+            st.error(
+                "Could not build the hardest-questions deck."
+            )
             st.exception(error)
 
     if hardest_total_preview == 0:
@@ -1689,7 +2295,10 @@ with st.sidebar:
             hardest_done = 0
 
         st.progress(
-            min(hardest_done / hardest_total_preview, 1.0)
+            min(
+                hardest_done / hardest_total_preview,
+                1.0
+            )
         )
 
         st.caption(
@@ -1706,12 +2315,19 @@ with st.sidebar:
         bank_id = bank["bank_id"]
 
         if bank["error"]:
-            st.caption(f"⚠️ {bank['display_name']} — failed to load")
+            st.caption(
+                f"⚠️ {bank['display_name']} — failed to load"
+            )
             continue
 
-        is_selected = st.session_state.selected_bank == bank_id
+        is_selected = (
+            st.session_state.selected_bank == bank_id
+        )
 
-        label = f"{'▶ ' if is_selected else ''}{bank['display_name']}"
+        label = (
+            f"{'▶ ' if is_selected else ''}"
+            f"{bank['display_name']}"
+        )
 
         if st.button(
             label,
@@ -1725,6 +2341,7 @@ with st.sidebar:
                     st.session_state.participant_id,
                     bank_id
                 )
+
                 st.rerun()
 
             except Exception as error:
@@ -1739,16 +2356,31 @@ with st.sidebar:
                 st.session_state.participant_id,
                 bank_id
             )
-        except Exception:
-            cycle, done, total = 1, 0, len(bank["questions"])
 
-        fraction = (done / total) if total else 0.0
+        except Exception:
+            cycle, done, total = (
+                1,
+                0,
+                len(bank["questions"])
+            )
+
+        fraction = (
+            done / total
+            if total
+            else 0.0
+        )
 
         st.progress(min(fraction, 1.0))
 
-        cycle_note = f" · cycle {cycle}" if cycle > 1 else ""
+        cycle_note = (
+            f" · cycle {cycle}"
+            if cycle > 1
+            else ""
+        )
 
-        st.caption(f"{done} / {total} completed{cycle_note}")
+        st.caption(
+            f"{done} / {total} completed{cycle_note}"
+        )
 
     st.divider()
 
@@ -1820,12 +2452,18 @@ if admin_password:
                 admin_df = pd.DataFrame(all_answers)
 
                 st.write(
-                    f"Total recorded answer attempts: {len(admin_df):,}"
+                    f"Total recorded answer attempts: "
+                    f"{len(admin_df):,}"
                 )
 
-                st.dataframe(admin_df, use_container_width=True)
+                st.dataframe(
+                    admin_df,
+                    use_container_width=True
+                )
 
-                csv_data = admin_df.to_csv(index=False).encode("utf-8")
+                csv_data = admin_df.to_csv(
+                    index=False
+                ).encode("utf-8")
 
                 st.download_button(
                     label="Download CSV",
@@ -1846,11 +2484,9 @@ if admin_password:
         st.write("**🚩 Flagged Questions**")
 
         try:
-
             flags = get_flagged_questions()
 
         except Exception as error:
-
             flags = []
             st.error("Could not load flagged questions.")
             st.exception(error)
@@ -1861,15 +2497,25 @@ if admin_password:
 
             for flag in flags:
 
-                key = (flag.get("bank_id"), flag["question_number"])
+                key = (
+                    flag.get("bank_id"),
+                    flag["question_number"]
+                )
 
-                flags_by_bank_question.setdefault(key, []).append(flag)
+                flags_by_bank_question.setdefault(
+                    key,
+                    []
+                ).append(flag)
 
             sorted_keys = sorted(
                 flags_by_bank_question.keys(),
                 key=lambda item: (
-                    BANKS_BY_ID.get(item[0], {}).get(
-                        "display_name", item[0] or ""
+                    BANKS_BY_ID.get(
+                        item[0],
+                        {}
+                    ).get(
+                        "display_name",
+                        item[0] or ""
                     ),
                     item[1]
                 )
@@ -1877,11 +2523,15 @@ if admin_password:
 
             for flag_bank_id, q_number in sorted_keys:
 
-                entries = flags_by_bank_question[(flag_bank_id, q_number)]
+                entries = flags_by_bank_question[
+                    (flag_bank_id, q_number)
+                ]
 
                 bank = BANKS_BY_ID.get(flag_bank_id)
+
                 bank_label = (
-                    bank["display_name"] if bank
+                    bank["display_name"]
+                    if bank
                     else (flag_bank_id or "Unknown bank")
                 )
 
@@ -1889,15 +2539,19 @@ if admin_password:
 
                 with col_info:
                     st.write(
-                        f"**{bank_label}** — question **{q_number}** "
-                        f"— flagged {len(entries)} time(s)"
+                        f"**{bank_label}** — question "
+                        f"**{q_number}** — flagged "
+                        f"{len(entries)} time(s)"
                     )
 
                 with col_trash:
 
                     if bank is not None and st.button(
                         "🗑️ Remove",
-                        key=f"admin_trash_{flag_bank_id}_{q_number}"
+                        key=(
+                            f"admin_trash_"
+                            f"{flag_bank_id}_{q_number}"
+                        )
                     ):
 
                         try:
@@ -1907,31 +2561,39 @@ if admin_password:
                                 q_number
                             )
 
-                            if st.session_state.selected_bank == flag_bank_id:
-                                drop_question_from_session(q_number)
+                            if (
+                                st.session_state.selected_bank
+                                == flag_bank_id
+                            ):
+                                drop_question_from_session(
+                                    q_number
+                                )
 
                             st.success(
-                                f"Question {q_number} removed from "
-                                f"{bank_label}."
+                                f"Question {q_number} removed "
+                                f"from {bank_label}."
                             )
 
                             st.rerun()
 
                         except Exception as error:
-
                             st.error(
                                 "Could not remove the question."
                             )
-
                             st.exception(error)
 
         else:
-            st.caption("No questions have been flagged.")
+            st.caption(
+                "No questions have been flagged."
+            )
 
     else:
         st.error("Incorrect administrator password.")
 
-st.markdown("</details>", unsafe_allow_html=True)
+st.markdown(
+    "</details>",
+    unsafe_allow_html=True
+)
 
 
 # ============================================================
@@ -1939,12 +2601,17 @@ st.markdown("</details>", unsafe_allow_html=True)
 # ============================================================
 
 selected_bank_id = st.session_state.selected_bank
-is_hardest_mode = selected_bank_id == HARDEST_BANK_ID
+
+is_hardest_mode = (
+    selected_bank_id == HARDEST_BANK_ID
+)
 
 if is_hardest_mode:
     current_bank_display_name = HARDEST_BANK_LABEL
 else:
-    current_bank_display_name = BANKS_BY_ID[selected_bank_id]["display_name"]
+    current_bank_display_name = (
+        BANKS_BY_ID[selected_bank_id]["display_name"]
+    )
 
 questions = st.session_state.questions
 
@@ -1952,10 +2619,14 @@ current_index = st.session_state.current_index
 
 total_questions_all = st.session_state.selected_bank_total
 
-st.caption(f"**Current bank:** {current_bank_display_name}")
+st.caption(
+    f"**Current bank:** {current_bank_display_name}"
+)
 
 if total_questions_all == 0:
-    st.warning("There are no questions left in this question bank.")
+    st.warning(
+        "There are no questions left in this question bank."
+    )
     st.stop()
 
 
@@ -2032,7 +2703,10 @@ question_number = question["number"]
 # route back to the bank the question actually came from —
 # not to the virtual "hardest_questions" id, which has no real
 # document or progress row behind it.
-effective_bank_id = question.get("source_bank_id", selected_bank_id)
+effective_bank_id = question.get(
+    "source_bank_id",
+    selected_bank_id
+)
 
 
 # ============================================================
@@ -2049,18 +2723,25 @@ progress = overall_position / total_questions_all
 
 st.progress(min(progress, 1.0))
 
-st.write(f"### Question {overall_position} of {total_questions_all}")
+st.write(
+    f"### Question {overall_position} of {total_questions_all}"
+)
 
 if is_hardest_mode:
 
     source_bank_label = BANKS_BY_ID.get(
-        effective_bank_id, {}
-    ).get("display_name", effective_bank_id)
+        effective_bank_id,
+        {}
+    ).get(
+        "display_name",
+        effective_bank_id
+    )
 
     st.caption(
         f"From **{source_bank_label}** · "
         f"Document question number: {question_number} · "
-        f"Global accuracy: {question.get('source_accuracy', 0) * 100:.0f}% "
+        f"Global accuracy: "
+        f"{question.get('source_accuracy', 0) * 100:.0f}% "
         f"({question.get('source_attempts', 0)} attempts)"
     )
 
@@ -2090,7 +2771,13 @@ except Exception:
         "attempts": 0,
         "correct": 0,
         "accuracy": 0,
-        "answers": {"A": 0, "B": 0, "C": 0, "D": 0, "E": 0},
+        "answers": {
+            "A": 0,
+            "B": 0,
+            "C": 0,
+            "D": 0,
+            "E": 0
+        },
         "global_attempts": 0,
         "global_correct": 0,
         "global_accuracy": 0,
@@ -2111,27 +2798,40 @@ if st.session_state.last_feedback:
 
         for letter in ["A", "B", "C", "D", "E"]:
 
-            count = historical_stats["answers"].get(letter, 0)
+            count = historical_stats["answers"].get(
+                letter,
+                0
+            )
 
-            percentage = count / historical_attempts * 100
+            percentage = (
+                count / historical_attempts * 100
+            )
 
-            distribution_parts.append(f"{letter}: {percentage:.0f}%")
+            distribution_parts.append(
+                f"{letter}: {percentage:.0f}%"
+            )
 
         if global_attempts > 0:
 
             st.caption(
-                f"Your previous attempts: **{historical_attempts}** | "
-                f"Your historical accuracy: **{historical_accuracy:.0f}%** | "
-                f"Global historical accuracy: **{global_accuracy:.0f}%** | "
-                f"Previously selected: {' '.join(distribution_parts)}"
+                f"Your previous attempts: "
+                f"**{historical_attempts}** | "
+                f"Your historical accuracy: "
+                f"**{historical_accuracy:.0f}%** | "
+                f"Global historical accuracy: "
+                f"**{global_accuracy:.0f}%** | "
+                f"Previously selected: "
+                f"{' '.join(distribution_parts)}"
             )
 
         else:
 
             st.caption(
-                f"Your previous attempts: **{historical_attempts}** | "
-                f"Your historical accuracy: **{historical_accuracy:.0f}%** | "
-                f"Global historical accuracy: No previous attempts"
+                f"Your previous attempts: "
+                f"**{historical_attempts}** | "
+                f"Your historical accuracy: "
+                f"**{historical_accuracy:.0f}%** | "
+                "Global historical accuracy: No previous attempts"
             )
 
     else:
@@ -2140,7 +2840,8 @@ if st.session_state.last_feedback:
 
             st.caption(
                 "Your previous attempts: **none** | "
-                f"Global historical accuracy: **{global_accuracy:.0f}%**"
+                f"Global historical accuracy: "
+                f"**{global_accuracy:.0f}%**"
             )
 
         else:
@@ -2149,6 +2850,7 @@ if st.session_state.last_feedback:
                 "Your previous attempts: none | "
                 "Global historical accuracy: no attempts yet"
             )
+
 
 # ============================================================
 # REPORT / REMOVE ROW
@@ -2159,7 +2861,10 @@ flag_col, trash_col = st.columns([3, 1])
 with flag_col:
 
     already_flagged = (
-        (effective_bank_id, question_number)
+        (
+            effective_bank_id,
+            question_number
+        )
         in st.session_state.flagged_this_session
     )
 
@@ -2184,13 +2889,15 @@ with flag_col:
                 )
 
                 st.session_state.flagged_this_session.add(
-                    (effective_bank_id, question_number)
+                    (
+                        effective_bank_id,
+                        question_number
+                    )
                 )
 
                 st.rerun()
 
             except Exception as error:
-
                 st.error("Could not save your report.")
                 st.exception(error)
 
@@ -2210,14 +2917,17 @@ with trash_col:
                     question_number
                 )
 
-                drop_question_from_session(question_number)
+                drop_question_from_session(
+                    question_number
+                )
 
-                st.success(f"Question {question_number} removed.")
+                st.success(
+                    f"Question {question_number} removed."
+                )
 
                 st.rerun()
 
             except Exception as error:
-
                 st.error("Could not remove the question.")
                 st.exception(error)
 
@@ -2226,91 +2936,179 @@ with trash_col:
 # QUESTION
 # ============================================================
 
-st.markdown(f"### {question['question']}")
+st.markdown(
+    f"### {question['question']}"
+)
 
 
 # ============================================================
-# ANSWER BUTTONS
+# ANSWER CHOICES — LEFT-CLICK TO ANSWER, RIGHT-CLICK TO CROSS OFF
 # ============================================================
 
-for letter in ["A", "B", "C", "D", "E"]:
+# The component key is unique to the current queue and question.
+# This means marked choices persist through reruns (for example,
+# after an incorrect answer), but reset for a new queue/question.
 
-    if letter not in question["options"]:
-        continue
+component_key = (
+    f"answer_choices_"
+    f"{st.session_state.queue_instance_id}_"
+    f"{selected_bank_id}_"
+    f"{current_index}_"
+    f"{effective_bank_id}_"
+    f"{question_number}"
+)
 
-    option_text = question["options"][letter]
-    button_text = f"{letter}. {option_text}"
+# The component value is stored by Streamlit under component_key.
+# Read any existing crossed-out choices before rendering it again.
+previous_component_value = st.session_state.get(
+    component_key
+)
 
-    if st.session_state.current_correct:
+if isinstance(previous_component_value, dict):
 
-        if letter == question["correct_letter"]:
-            st.success(button_text)
-        else:
-            st.button(
-                button_text,
-                disabled=True,
-                use_container_width=True,
-                key=f"disabled_{selected_bank_id}_{current_index}_{letter}"
-            )
+    crossed_letters = previous_component_value.get(
+        "crossed_letters",
+        []
+    )
 
-        continue
+    if not isinstance(crossed_letters, list):
+        crossed_letters = []
 
-    if st.button(
-        button_text,
-        use_container_width=True,
-        key=f"question_{selected_bank_id}_{current_index}_{letter}"
+else:
+    crossed_letters = []
+
+# Only pass letters that actually exist in this question.
+crossed_letters = [
+    letter
+    for letter in crossed_letters
+    if letter in question["options"]
+]
+
+answer_choice_options = [
+    {
+        "letter": letter,
+        "text": question["options"][letter]
+    }
+    for letter in ["A", "B", "C", "D", "E"]
+    if letter in question["options"]
+]
+
+component_result = answer_choice_component(
+    options=answer_choice_options,
+    crossed_letters=crossed_letters,
+    current_correct=st.session_state.current_correct,
+    correct_letter=question["correct_letter"],
+    key=component_key,
+    default={
+        "event_id": None,
+        "action": "none",
+        "letter": None,
+        "crossed_letters": []
+    }
+)
+
+
+# ============================================================
+# PROCESS ANSWER-CHOICE INTERACTIONS
+# ============================================================
+# Right-click interactions update only the component's visual
+# state. They do not save an answer or affect quiz statistics.
+#
+# Left-click interactions follow the original answer-submission
+# workflow, including saving to Supabase and retrying incorrect
+# answers until the correct answer is selected.
+# ============================================================
+
+if isinstance(component_result, dict):
+
+    event_id = component_result.get("event_id")
+    action = component_result.get("action")
+    selected_letter = component_result.get("letter")
+
+    # A component's last value can be returned again during later
+    # Streamlit reruns. Process each individual event only once.
+    processed_event_key = (
+        f"_processed_event_{component_key}"
+    )
+
+    already_processed_event = (
+        event_id is not None
+        and event_id
+        == st.session_state.get(processed_event_key)
+    )
+
+    if (
+        event_id is not None
+        and not already_processed_event
     ):
 
-        try:
+        st.session_state[processed_event_key] = event_id
 
-            if is_hardest_mode:
-                # The hardest-questions deck has no cycle of
-                # its own — save against whatever cycle the
-                # participant is actually on in the real bank
-                # this question came from.
-                effective_cycle = get_participant_cycle(
+        if (
+            action == "answer"
+            and not st.session_state.current_correct
+            and selected_letter in question["options"]
+        ):
+
+            try:
+
+                if is_hardest_mode:
+                    # The hardest-questions deck has no cycle of
+                    # its own — save against the participant's
+                    # real bank and its current cycle.
+                    effective_cycle = get_participant_cycle(
+                        st.session_state.participant_id,
+                        effective_bank_id
+                    )
+
+                else:
+                    effective_cycle = st.session_state.cycle
+
+                is_correct = save_answer(
                     st.session_state.participant_id,
-                    effective_bank_id
+                    st.session_state.display_name,
+                    effective_bank_id,
+                    question,
+                    selected_letter,
+                    effective_cycle
                 )
+
+            except Exception as error:
+
+                st.error("Your answer could not be saved.")
+                st.exception(error)
+                st.stop()
+
+            if is_correct:
+
+                st.session_state.current_correct = True
+                st.session_state.last_feedback = "✓ Correct!"
+                st.session_state.last_feedback_type = "correct"
+                st.session_state.show_explanation = True
+                st.session_state.flash_type = "correct"
+                st.session_state.wrong_answer_streak = 0
+                st.session_state.meltdown_popup = False
+
             else:
-                effective_cycle = st.session_state.cycle
 
-            is_correct = save_answer(
-                st.session_state.participant_id,
-                st.session_state.display_name,
-                effective_bank_id,
-                question,
-                letter,
-                effective_cycle
-            )
+                st.session_state.last_feedback = (
+                    "✗ Incorrect — try again."
+                )
 
-        except Exception as error:
+                st.session_state.last_feedback_type = "incorrect"
+                st.session_state.flash_type = "incorrect"
 
-            st.error("Your answer could not be saved.")
-            st.exception(error)
-            st.stop()
+                st.session_state.wrong_answer_streak += 1
 
-        if is_correct:
+                if st.session_state.wrong_answer_streak >= 2:
+                    st.session_state.meltdown_popup = True
 
-            st.session_state.current_correct = True
-            st.session_state.last_feedback = "✓ Correct!"
-            st.session_state.last_feedback_type = "correct"
-            st.session_state.show_explanation = True
-            st.session_state.flash_type = "correct"
-            st.session_state.wrong_answer_streak = 0
-            st.session_state.meltdown_popup = False
+            st.rerun()
 
-        else:
-
-            st.session_state.last_feedback = "✗ Incorrect — try again."
-            st.session_state.last_feedback_type = "incorrect"
-            st.session_state.flash_type = "incorrect"
-            st.session_state.wrong_answer_streak += 1
-
-            if st.session_state.wrong_answer_streak >= 2:
-                st.session_state.meltdown_popup = True
-
-        st.rerun()
+        # For "toggle_crossout", there is intentionally no
+        # answer-submission logic here. The component has already
+        # updated its visual state and Streamlit stores that state
+        # under component_key.
 
 
 # ============================================================
@@ -2320,9 +3118,16 @@ for letter in ["A", "B", "C", "D", "E"]:
 if st.session_state.last_feedback:
 
     if st.session_state.last_feedback_type == "correct":
-        st.success(st.session_state.last_feedback)
+
+        st.success(
+            st.session_state.last_feedback
+        )
+
     elif st.session_state.last_feedback_type == "incorrect":
-        st.error(st.session_state.last_feedback)
+
+        st.error(
+            st.session_state.last_feedback
+        )
 
 
 # ============================================================
@@ -2335,7 +3140,9 @@ if st.session_state.show_explanation:
 
     st.subheader("Explanation")
 
-    st.info(question["explanation"])
+    st.info(
+        question["explanation"]
+    )
 
     st.write(
         f"**Correct answer: "
@@ -2345,10 +3152,14 @@ if st.session_state.show_explanation:
 
     st.divider()
 
-    is_last_in_queue = current_index == len(questions) - 1
+    is_last_in_queue = (
+        current_index == len(questions) - 1
+    )
 
     next_button_text = (
-        "Finish Quiz" if is_last_in_queue else "Next Question →"
+        "Finish Quiz"
+        if is_last_in_queue
+        else "Next Question →"
     )
 
     if st.button(
